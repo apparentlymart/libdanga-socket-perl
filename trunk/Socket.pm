@@ -27,8 +27,8 @@ use fields qw(sock fd write_buf write_buf_offset write_buf_size
               read_push_back
               closed event_watch debug_level);
 
-use Errno qw(EINPROGRESS EWOULDBLOCK EISCONN
-             EPIPE EAGAIN EBADF ECONNRESET);
+use Errno qw(EINPROGRESS EWOULDBLOCK EISCONN ENOTSOCK
+             EPIPE EAGAIN EBADF ECONNRESET ENOPROTOOPT);
 
 use Socket qw(IPPROTO_TCP);
 use Carp qw{croak confess};
@@ -333,9 +333,18 @@ sub tcp_cork {
 
     # if we failed, close (if we're not already) and warn about the error
     unless ($rv) {
-        $self->close('tcp_cork_failed')
-            unless $self->{closed};
-        warn "setsockopt: $!";
+        if ($rv == EBADF || $rv == ENOTSOCK) {
+            # internal state is probably corrupted; warn and then close if
+            # we're not closed already
+            warn "setsockopt: $!";
+            $self->close('tcp_cork_failed')
+                unless $self->{closed};
+        } elsif ($rv == ENOPROTOOPT) {
+            # TCP implementation doesn't support corking, so just ignore it
+        } else {
+            # some other error; we should never hit here, but if we do, die
+            die "setsockopt: $!";
+        }
     }
 }
 
