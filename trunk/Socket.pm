@@ -16,11 +16,15 @@ use Errno qw(EINPROGRESS EWOULDBLOCK EISCONN
              EPIPE EAGAIN EBADF ECONNRESET);
 
 use Socket qw(IPPROTO_TCP);
+use Carp qw{croak confess};
 
 use constant TCP_CORK => 3; # FIXME: not hard-coded (Linux-specific too)
 
 # Explicitly define the poll constants, as either one set or the other won't be
-# loaded.
+# loaded. They're also badly implemented in IO::Epoll:
+# The IO::Epoll module is buggy in that it doesn't export constants efficiently
+# (at least as of 0.01), so doing constants ourselves saves 13% of the user CPU
+# time
 use constant EPOLLIN       => 1;
 use constant EPOLLOUT      => 4;
 use constant EPOLLERR      => 8;
@@ -51,7 +55,7 @@ $DebugLevel = 0;
 %OtherFds = ();
 
 # Try to load IO::Epoll, falling back to IO::Poll if that doesn't work
-$HaveEpoll = eval qq{ use IO::Epoll qw{}; 1 };
+$HaveEpoll = eval qq{ use IO::Epoll qw{epoll_ctl epoll_wait}; 1 };
 if ( $HaveEpoll ) {
     *EventLoop = *EpollEventLoop;
 } else {
@@ -107,6 +111,16 @@ sub OtherFds {
 }
 
 
+### (CLASS) METHOD: DescriptorMap()
+### Get the hash of Danga::Socket objects keyed by the file descriptor they are
+### wrapping.
+sub DescriptorMap {
+    return wantarray ? %DescriptorMap : \%DescriptorMap;
+}
+*descriptor_map = *DescriptorMap;
+*get_sock_ref = *DescriptorMap;
+
+
 ### FUNCTION: EventLoop()
 ### Start processing IO events.
 sub EventLoop {}
@@ -143,8 +157,8 @@ sub EpollEventLoop {
                     next;
                 }
 
-                $class->debugmsg( 1, "Event: fd=%d (%s), state=%d \@ %s\n",
-                                 $ev->[0], ref($pob), $ev->[1], time() );
+                $class->DebugMsg( 1, "Event: fd=%d (%s), state=%d \@ %s\n",
+                                  $ev->[0], ref($pob), $ev->[1], time() );
 
                 my $state = $ev->[1];
                 $pob->event_read   if $state & EPOLLIN && ! $pob->{closed};
@@ -296,6 +310,11 @@ sub close {
     my $fd = $self->{fd};
     my $sock = $self->{sock};
     $self->{closed} = 1;
+
+    # we need to flush our write buffer, as there may
+    # be self-referential closures (sub { $client->close })
+    # preventing the object from being destroyed
+    $self->{write_buf} = [];
 
     if ( $self->{debug_level} || $DebugLevel ) {
         my ($pkg, $filename, $line) = caller;
@@ -568,6 +587,7 @@ sub watch_write {
 ### I<level>.
 sub debugmsg {
     my ( $self, $lvl, $fmt, @args ) = @_;
+    confess "Not an object" if not ref $self;
 
     chomp $fmt;
     return unless $self->{debug_level} >= $lvl || $DebugLevel >= $lvl;
