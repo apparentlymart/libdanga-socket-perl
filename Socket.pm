@@ -24,6 +24,7 @@ use vars qw{$VERSION};
 $VERSION = do { my @r = (q$Revision$ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r };
 
 use fields qw(sock fd write_buf write_buf_offset write_buf_size
+              read_push_back
               closed event_watch debug_level);
 
 use Errno qw(EINPROGRESS EWOULDBLOCK EISCONN
@@ -60,13 +61,14 @@ use constant POLLNVAL      => 32;
 
 # keep track of active clients
 our (
-    $HaveEpoll,                 # Flag -- is epoll available?  initially undefined.
-    %DescriptorMap,             # fd (num) -> Danga::Socket object
-    $Epoll,                     # Global epoll fd (for epoll mode only)
-    @ToClose,                   # sockets to close when event loop is done
-    %OtherFds,                  # A hash of "other" (non-Danga::Socket) file
-                                # descriptors for the event loop to track.
-);
+     $HaveEpoll,                 # Flag -- is epoll available?  initially undefined.
+     %DescriptorMap,             # fd (num) -> Danga::Socket object
+     %PushBackSet,               # fd (num) -> Danga::Socket (fds with pushed back read data)
+     $Epoll,                     # Global epoll fd (for epoll mode only)
+     @ToClose,                   # sockets to close when event loop is done
+     %OtherFds,                  # A hash of "other" (non-Danga::Socket) file
+                                 # descriptors for the event loop to track.
+     );
 
 %OtherFds = ();
 
@@ -187,17 +189,33 @@ sub EpollEventLoop {
                     $pob->event_hup    if $state & EPOLLHUP && ! $pob->{closed};
                 }
             }
+            PostEventLoop();
 
-            # now we can close sockets that wanted to close during our event processing.
-            # (we didn't want to close them during the loop, as we didn't want fd numbers
-            #  being reused and confused during the event loop)
-            $_->close while ($_ = shift @ToClose);
         }
         print STDERR "Event loop ending; restarting.\n";
     }
     exit 0;
 }
 
+sub PostEventLoop {
+    # fire read events for objects with pushed-back read data
+    my $loop = 1;
+    while ($loop) {
+        $loop = 0;
+        foreach my $fd (keys %PushBackSet) {
+            my Danga::Socket $pob = $PushBackSet{$fd};
+            next unless (! $pob->{closed} &&
+                         $pob->{event_watch} & POLLIN);
+            $loop = 1;
+            $pob->event_read;
+        }
+    }
+
+    # now we can close sockets that wanted to close during our event processing.
+    # (we didn't want to close them during the loop, as we didn't want fd numbers
+    #  being reused and confused during the event loop)
+    $_->close while ($_ = shift @ToClose);
+}
 
 ### The fallback IO::Poll-based event loop. Gets installed as EventLoop if
 ### IO::Epoll fails to load.
@@ -241,11 +259,7 @@ sub PollEventLoop {
             $pob->event_hup    if $state & POLLHUP && ! $pob->{closed};
         }
 
-        # now we can close sockets that wanted to close during our event processing.
-        # (we didn't want to close them during the loop, as we didn't want fd numbers
-        #  being reused and confused during the event loop)
-        my $sock;
-        $sock->close while $sock = shift @ToClose;
+        PostEventLoop();
     }
 
     exit 0;
@@ -278,6 +292,7 @@ sub new {
     $self->{write_buf_offset} = 0;
     $self->{write_buf_size} = 0;
     $self->{closed} = 0;
+    $self->{read_push_back} = [];
 
     $self->{event_watch} = POLLERR|POLLHUP|POLLNVAL;
 
@@ -287,7 +302,7 @@ sub new {
         epoll_ctl($Epoll, EPOLL_CTL_ADD, $fd, $self->{event_watch})
             and die "couldn't add epoll watch for $fd\n";
 
-    } 
+    }
 
     $DescriptorMap{$fd} = $self;
     return $self;
@@ -339,6 +354,7 @@ sub close {
     }
 
     delete $DescriptorMap{$fd};
+    delete $PushBackSet{$fd};
 
     # defer closing the actual socket until the event loop is done
     # processing this round of events.  (otherwise we might reuse fds)
@@ -470,6 +486,14 @@ sub write {
     }
 }
 
+### METHOD: push_back_read( $buf )
+### Push back I<buf> (a scalar or scalarref) into the read stream
+sub push_back_read {
+    my Danga::Socket $self = shift;
+    my $buf = shift;
+    push @{$self->{read_push_back}}, ref $buf ? $buf : \$buf;
+    $PushBackSet{$self->{fd}} = $self;
+}
 
 ### METHOD: read( $bytecount )
 ### Read at most I<bytecount> bytes from the underlying handle; returns scalar
@@ -479,6 +503,23 @@ sub read {
     my $bytes = shift;
     my $buf;
     my $sock = $self->{sock};
+
+    if (@{$self->{read_push_back}}) {
+        $buf = shift @{$self->{read_push_back}};
+        my $len = length($$buf);
+        if ($len <= $buf) {
+            unless (@{$self->{read_push_back}}) {
+                delete $PushBackSet{$self->{fd}};
+            }
+            return $buf;
+        } else {
+            # if the pushed back read is too big, we have to split it
+            my $overflow = substr($$buf, $bytes);
+            $buf = substr($$buf, 0, $bytes);
+            unshift @{$self->{read_push_back}}, \$overflow,
+            return \$buf;
+        }
+    }
 
     my $res = sysread($sock, $buf, $bytes, 0);
     DebugLevel >= 2 && $self->debugmsg("sysread = %d; \$! = %d", $res, $!);
