@@ -266,7 +266,9 @@ sub EpollEventLoop {
     my $class = shift;
 
     foreach my $fd ( keys %OtherFds ) {
-        epoll_ctl($Epoll, EPOLL_CTL_ADD, $fd, EPOLLIN);
+        if (epoll_ctl($Epoll, EPOLL_CTL_ADD, $fd, EPOLLIN) == -1) {
+            print STDERR "epoll_ctl(): failure adding fd=$fd; $! (", $!+0, ")\n";
+        }
     }
 
     while (1) {
@@ -294,7 +296,7 @@ sub EpollEventLoop {
                         $code->($state);
                     } else {
                         my $fd = $ev->[0];
-                        warn "epoll() returned fd $fd w/ state $state for which we have no mapping.  removing.\n";
+                        print STDERR "epoll() returned fd $fd w/ state $state for which we have no mapping.  removing.\n";
                         POSIX::close($fd);
                         epoll_ctl($Epoll, EPOLL_CTL_DEL, $fd, 0);
                     }
@@ -481,8 +483,10 @@ sub steal_socket {
 
     # now remove this socket from our epoll handler (otherwise we get confused)
     $self->tcp_cork(0);
-    epoll_ctl($Epoll, EPOLL_CTL_DEL, $self->{fd}, $self->{event_watch})
-        if $HaveEpoll;
+    if ($HaveEpoll && (epoll_ctl($Epoll, EPOLL_CTL_DEL, $self->{fd}, $self->{event_watch}) == -1)) {
+        print STDERR "epoll_ctl(): failure deleting fd=$self->{fd} during steal; $! (", $!+0, ")\n";
+        return undef;
+    }
 
     # now return the socket
     $self->{sock} = undef;
@@ -513,7 +517,7 @@ sub close {
         if (epoll_ctl($Epoll, EPOLL_CTL_DEL, $fd, $self->{event_watch}) == 0) {
             DebugLevel >= 1 && $self->debugmsg("Client %d disconnected.\n", $fd);
         } else {
-            DebugLevel >= 1 && $self->debugmsg("poll->remove failed on fd %d\n", $fd);
+            print STDERR "epoll_ctl(): failure deleting fd=$fd during close reason=$reason; $! (", $!+0, ")\n";
         }
     }
 
@@ -745,7 +749,7 @@ sub watch_read {
         if ($HaveEpoll) {
             epoll_ctl($Epoll, EPOLL_CTL_MOD, $self->{fd}, $event)
                 and print STDERR "couldn't modify epoll settings for $self->{fd} " .
-                "($self) from $self->{event_watch} -> $event\n";
+                                 "($self) from $self->{event_watch} -> $event: $! (", $!+0, ")\n";
         }
         $self->{event_watch} = $event;
     }
@@ -768,7 +772,7 @@ sub watch_write {
         if ($HaveEpoll) {
             epoll_ctl($Epoll, EPOLL_CTL_MOD, $self->{fd}, $event)
                 and print STDERR "couldn't modify epoll settings for $self->{fd} " .
-                "($self) from $self->{event_watch} -> $event\n";
+                                 "($self) from $self->{event_watch} -> $event: $! (", $!+0, ")\n";
         }
         $self->{event_watch} = $event;
     }
