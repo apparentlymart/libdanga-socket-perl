@@ -333,13 +333,13 @@ sub tcp_cork {
 
     # if we failed, close (if we're not already) and warn about the error
     unless ($rv) {
-        if ($rv == EBADF || $rv == ENOTSOCK) {
+        if ($! == EBADF || $! == ENOTSOCK) {
             # internal state is probably corrupted; warn and then close if
             # we're not closed already
             warn "setsockopt: $!";
             $self->close('tcp_cork_failed')
                 unless $self->{closed};
-        } elsif ($rv == ENOPROTOOPT) {
+        } elsif ($! == ENOPROTOOPT) {
             # TCP implementation doesn't support corking, so just ignore it
         } else {
             # some other error; we should never hit here, but if we do, die
