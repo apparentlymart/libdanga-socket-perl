@@ -1,3 +1,13 @@
+1.40:
+
+   -- Kqueue support from Matt Sergeant
+
+1.39:
+
+   -- make BSD::Resource optional
+
+1.38:
+
    -- added support for profiling (epoll only at the moment while this
       feature is further fleshed out); user application is required to
       enable profiling and actually process the resultant data

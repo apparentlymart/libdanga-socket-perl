@@ -22,7 +22,6 @@ WriteMakefile(
         fields          => 0,
         'POSIX'         => 0,
         'Test::More'    => 0,
-        'BSD::Resource' => 0,
     },
     dist                    => {
         CI                      => "cvs commit",
