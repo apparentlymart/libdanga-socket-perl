@@ -1,3 +1,7 @@
+   -- if epoll_wait returns an event we can't handle, delete it.
+      this means the application fucked up and lost its state somehow.
+      or maybe Danga::Socket did?  still debugging this in Perlbal.
+
 1.25: (2004-10-22)
 
    -- move the syscall.ph require into "package main" rather than stealing

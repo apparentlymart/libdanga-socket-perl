@@ -20,6 +20,7 @@ WriteMakefile(
         'Socket'        => 0,
         'IO::Poll'      => 0,
         fields          => 0,
+        'POSIX'         => 0,
     },
     dist                    => {
         CI                      => "cvs commit",

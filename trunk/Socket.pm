@@ -122,6 +122,7 @@ eval { require 'syscall.ph'; 1 } || eval { require 'sys/syscall.ph'; 1 };
 
 package Danga::Socket;
 use strict;
+use POSIX ();
 
 use vars qw{$VERSION};
 $VERSION = do { my @r = (q$Revision$ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r };
@@ -291,6 +292,11 @@ sub EpollEventLoop {
                 if (! $pob) {
                     if (my $code = $OtherFds{$ev->[0]}) {
                         $code->($state);
+                    } else {
+                        my $fd = $ev->[0];
+                        warn "epoll() returned fd $fd w/ state $state for which we have no mapping.  removing.\n";
+                        POSIX::close($fd);
+                        epoll_ctl($Epoll, EPOLL_CTL_DEL, $fd, 0);
                     }
                     next;
                 }
