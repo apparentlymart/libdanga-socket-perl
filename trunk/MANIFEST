@@ -2,4 +2,5 @@ Makefile.PL
 CHANGES
 MANIFEST
 Socket.pm
+t/00use.t
 META.yml                                 Module meta-data (added by MakeMaker)
