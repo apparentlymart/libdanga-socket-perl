@@ -602,9 +602,18 @@ sub debugmsg {
 }
 
 
+### METHOD: peer_ip_string()
+### Returns the string describing the peer's IP
+sub peer_ip_string {
+    my Danga::Socket $self = shift;
+    my $pn = getpeername($self->{sock}) or return undef;
+    my ($port, $iaddr) = Socket::sockaddr_in($pn);
+    return Socket::inet_ntoa($iaddr);
+}
+
 ### METHOD: peer_addr_string()
 ### Returns the string describing the peer for the socket which underlies this
-### object.
+### object in form "ip:port"
 sub peer_addr_string {
     my Danga::Socket $self = shift;
     my $pn = getpeername($self->{sock}) or return undef;
