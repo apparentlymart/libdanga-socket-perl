@@ -68,6 +68,7 @@ our (
      @ToClose,                   # sockets to close when event loop is done
      %OtherFds,                  # A hash of "other" (non-Danga::Socket) file
                                  # descriptors for the event loop to track.
+     $PostLoopCallback,          # subref to call at the end of each loop, if defined
      );
 
 %OtherFds = ();
@@ -189,7 +190,7 @@ sub EpollEventLoop {
                     $pob->event_hup    if $state & EPOLLHUP && ! $pob->{closed};
                 }
             }
-            PostEventLoop();
+            return unless PostEventLoop();
 
         }
         print STDERR "Event loop ending; restarting.\n";
@@ -215,6 +216,12 @@ sub PostEventLoop {
     # (we didn't want to close them during the loop, as we didn't want fd numbers
     #  being reused and confused during the event loop)
     $_->close while ($_ = shift @ToClose);
+
+    # now we're at the very end, call callback if defined
+    if (defined $PostLoopCallback) {
+        return $PostLoopCallback->(\%DescriptorMap, \%OtherFds);
+    }
+    return 1;
 }
 
 ### The fallback IO::Poll-based event loop. Gets installed as EventLoop if
@@ -259,7 +266,7 @@ sub PollEventLoop {
             $pob->event_hup    if $state & POLLHUP && ! $pob->{closed};
         }
 
-        PostEventLoop();
+        return unless PostEventLoop();
     }
 
     exit 0;
@@ -653,6 +660,16 @@ sub as_string {
         $ret .= " to " . $self->peer_addr_string;
     }
     return $ret;
+}
+
+### CLASS METHOD: SetPostLoopCallback
+### Sets post loop callback function.  Pass a subref and it will be
+### called every time the event loop finishes.  Return 1 from the sub
+### to make the loop continue, else it will exit.  The function will
+### be passed two parameters: \%DescriptorMap, \%OtherFds.
+sub SetPostLoopCallback {
+    my ($class, $ref) = @_;
+    $PostLoopCallback = (defined $ref && ref $ref eq 'CODE') ? $ref : undef;
 }
 
 #####################################################################
