@@ -748,13 +748,12 @@ sub watch_read {
     if ($event != $self->{event_watch}) {
         if ($HaveEpoll) {
             epoll_ctl($Epoll, EPOLL_CTL_MOD, $self->{fd}, $event)
-                and print STDERR "couldn't modify epoll settings for $self->{fd} " .
-                                 "($self) from $self->{event_watch} -> $event: $! (", $!+0, ")\n";
+                and $self->dump_error("couldn't modify epoll settings for $self->{fd} " .
+                                      "from $self->{event_watch} -> $event: $! (" . ($!+0) . ")");
         }
         $self->{event_watch} = $event;
     }
 }
-
 
 ### METHOD: watch_write( $boolean )
 ### Turn 'writable' event notification on or off.
@@ -771,11 +770,26 @@ sub watch_write {
     if ($event != $self->{event_watch}) {
         if ($HaveEpoll) {
             epoll_ctl($Epoll, EPOLL_CTL_MOD, $self->{fd}, $event)
-                and print STDERR "couldn't modify epoll settings for $self->{fd} " .
-                                 "($self) from $self->{event_watch} -> $event: $! (", $!+0, ")\n";
+                and $self->dump_error("couldn't modify epoll settings for $self->{fd} " .
+                                      "from $self->{event_watch} -> $event: $! (" . ($!+0) . ")");
         }
         $self->{event_watch} = $event;
     }
+}
+
+# METHOD: dump_error( $message )
+# Prints to STDERR a backtrace with information about this socket and what lead
+# up to the dump_error call.
+sub dump_error {
+    my $i = 0;
+    my @list;
+    while (my ($file, $line, $sub) = (caller($i++))[1..3]) {
+        push @list, "\t$file:$line called $sub\n";
+    }
+    
+    print STDERR "ERROR: $_[1]\n" .
+                 "\t$_[0] = " . $_[0]->as_string . "\n" .
+                 join('', @list);
 }
 
 
