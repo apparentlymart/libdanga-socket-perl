@@ -5,6 +5,9 @@
 package Danga::Socket;
 use strict;
 
+use vars qw{$VERSION};
+$VERSION = do { my @r = (q$Revision$ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r };
+
 use fields qw(sock fd write_buf write_buf_offset write_buf_size
           read_buf read_ahead read_size
           closed event_watch debug_level);
