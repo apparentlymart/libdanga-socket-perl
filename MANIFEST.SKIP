@@ -9,3 +9,4 @@
 _blib$
 ^MakeMaker-\d
 ^\.exists
+\bdebian\b
