@@ -288,6 +288,27 @@ sub EventLoop {
     }
 }
 
+## profiling-related data/functions
+our ($Prof_utime0, $Prof_stime0);
+sub _pre_profile {
+    ($Prof_utime0, $Prof_stime0) = getrusage();
+}
+
+sub _post_profile {
+    # get post information
+    my ($autime, $astime) = getrusage();
+
+    # calculate differences
+    my $utime = $autime - $Prof_utime0;
+    my $stime = $astime - $Prof_stime0;
+
+    foreach my $k (@_) {
+        $Profiling{$k} ||= [ 0.0, 0.0, 0 ];
+        $Profiling{$k}->[0] += $utime;
+        $Profiling{$k}->[1] += $stime;
+        $Profiling{$k}->[2]++;
+    }
+}
 
 ### The epoll-based event loop. Gets installed as EventLoop if IO::Epoll loads
 ### okay.
@@ -336,40 +357,32 @@ sub EpollEventLoop {
                                                     $ev->[0], ref($pob), $ev->[1], time);
 
                 if ($DoProfile) {
-                    my $profile_action = sub {
-                        my ($pwhat, $pcall) = @_;
-
-                        # get pre information
-                        my ($putime, $pstime) = getrusage();
-
-                        # make the call
-                        $pcall->();
-
-                        # get post information
-                        my ($autime, $astime) = getrusage();
-
-                        # calculate differences
-                        my $utime = $autime - $putime;
-                        my $stime = $astime - $pstime;
-
-                        # now append this profiling data
-                        my $desc = ref($pob) . '-' . $pwhat;
-                        $Profiling{$desc} ||= [ 0.0, 0.0, 0 ];
-                        $Profiling{$desc}->[0] += $utime;
-                        $Profiling{$desc}->[1] += $stime;
-                        $Profiling{$desc}->[2]++;
-                    };
+                    my $class = ref $pob;
 
                     # call profiling action on things that need to be done
-                    $profile_action->('read', sub { $pob->event_read; })
-                        if $state & EPOLLIN && ! $pob->{closed};
-                    $profile_action->('write', sub { $pob->event_write; })
-                        if $state & EPOLLOUT && ! $pob->{closed};
+                    if ($state & EPOLLIN && ! $pob->{closed}) {
+                        _pre_profile();
+                        $pob->event_read;
+                        _post_profile("$class-read");
+                    }
+
+                    if ($state & EPOLLOUT && ! $pob->{closed}) {
+                        _pre_profile();
+                        $pob->event_write;
+                        _post_profile("$class-write");
+                    }
+
                     if ($state & (EPOLLERR|EPOLLHUP)) {
-                        $profile_action->('err', sub { $pob->event_err; })
-                            if $state & EPOLLERR && ! $pob->{closed};
-                        $profile_action->('hup', sub { $pob->event_hup; })
-                            if $state & EPOLLHUP && ! $pob->{closed};
+                        if ($state & EPOLLERR && ! $pob->{closed}) {
+                            _pre_profile();
+                            $pob->event_err;
+                            _post_profile("$class-err");
+                        }
+                        if ($state & EPOLLHUP && ! $pob->{closed}) {
+                            _pre_profile();
+                            $pob->event_hup;
+                            _post_profile("$class-hup");
+                        }
                     }
 
                     next;
