@@ -626,6 +626,12 @@ sub write {
                     shift @{$self->{write_buf}};
                 }
                 $bref->();
+
+                # code refs are just run and never get reenqueued
+                # (they're one-shot), so turn off the flag indicating the
+                # outstanding data needs queueing.
+                $need_queue = 0;
+
                 undef $bref;
                 next WRITE;
             }
