@@ -24,8 +24,7 @@ use vars qw{$VERSION};
 $VERSION = do { my @r = (q$Revision$ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r };
 
 use fields qw(sock fd write_buf write_buf_offset write_buf_size
-          read_buf read_ahead read_size
-          closed event_watch debug_level);
+              closed event_watch debug_level);
 
 use Errno qw(EINPROGRESS EWOULDBLOCK EISCONN
              EPIPE EAGAIN EBADF ECONNRESET);
@@ -491,23 +490,6 @@ sub read {
     }
 
     return \$buf;
-}
-
-
-### METHOD: drain_read_buf_to( $destination )
-### Write read-buffered data (if any) from the receiving object to the
-### I<destination> object.
-sub drain_read_buf_to {
-    my ($self, $dest) = @_;
-    return unless $self->{read_ahead};
-
-    DebugLevel >= 2 && $self->debugmsg("drain_read_buf_to (%d -> %d): %d bytes",
-                                       $self->{fd}, $dest->{fd}, $self->{read_ahead});
-
-    while (my $bref = shift @{$self->{read_buf}}) {
-        $dest->write($bref);
-        $self->{read_ahead} -= length($$bref);
-    }
 }
 
 
