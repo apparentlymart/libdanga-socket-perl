@@ -122,8 +122,9 @@ eval { require 'syscall.ph'; 1 } || eval { require 'sys/syscall.ph'; 1 };
 
 package Danga::Socket;
 use strict;
-use BSD::Resource;
 use POSIX ();
+
+my $opt_bsd_resource = eval "use BSD::Resource; 1;";
 
 use vars qw{$VERSION};
 $VERSION = do { my @r = (q$Revision$ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r };
@@ -206,8 +207,12 @@ sub WatchedSockets {
 ### (CLASS) METHOD: EnableProfiling()
 ### Turns profiling on, clearing current profiling data.
 sub EnableProfiling {
-    %Profiling = ();
-    $DoProfile = 1;
+    if ($opt_bsd_resource) {
+        %Profiling = ();
+        $DoProfile = 1;
+        return 1;
+    }
+    return 0;
 }
 
 ### (CLASS) METHOD: DisableProfiling()
