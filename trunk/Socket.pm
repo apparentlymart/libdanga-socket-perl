@@ -57,6 +57,7 @@ use constant POLLIN        => 1;
 use constant POLLOUT       => 4;
 use constant POLLERR       => 8;
 use constant POLLHUP       => 16;
+use constant POLLNVAL      => 32;
 
 # keep track of active clients
 our (
@@ -257,6 +258,10 @@ sub PollEventLoop {
             $pob->event_hup unless $pob->{closed};
         }
 
+        # Invalid events
+        foreach my $handle ( $Poll->handles(POLLNVAL) ) {
+            $Poll->remove($handle);
+        }
 
         # now we can close sockets that wanted to close during our event processing.
         # (we didn't want to close them during the loop, as we didn't want fd numbers
