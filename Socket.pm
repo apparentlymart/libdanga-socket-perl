@@ -59,7 +59,7 @@ $HaveEpoll = eval qq{ use IO::Epoll qw{epoll_create epoll_ctl epoll_wait}; 1 };
 if ( $HaveEpoll ) {
     *EventLoop = *EpollEventLoop;
 } else {
-    require IO::Poll; IO::Poll->import();
+    require IO::Poll;
     *EventLoop = *PollEventLoop;
 }
 
@@ -119,7 +119,7 @@ sub DescriptorMap {
 
 ### FUNCTION: EventLoop()
 ### Start processing IO events.
-sub EventLoop {}
+sub EventLoop { die "Placeholder eventloop not replaced." }
 
 
 ### The epoll-based event loop. Gets installed as EventLoop if IO::Epoll loads
@@ -178,11 +178,23 @@ sub EpollEventLoop {
 ### The fallback IO::Poll-based event loop. Gets installed as EventLoop if
 ### IO::Epoll fails to load.
 sub PollEventLoop {
+    my $class = shift;
 
     my Danga::Socket $pob;
     my $fd;
 
-    while ( $Poll->poll(-1) ) {
+    $Poll ||= new IO::Poll or
+        die "# fail: new IO::Poll: $!\n";
+    $class->DebugMsg( 1, "Using IO::Poll object for PollEventLoop: %s\n", $Poll );
+
+    foreach my $fd ( keys %OtherFds ) {
+        my $handle = IO::Handle->new_from_fd( $fd, "r" );
+        $Poll->mask( $handle, POLLIN );
+    }
+
+    my $count;
+  POLL: while (( $count = $Poll->poll )) {
+        next POLL unless $count;
 
         # Fetch handles with read events
         foreach my $handle ( $Poll->handles(POLLIN) ) {
@@ -224,9 +236,9 @@ sub PollEventLoop {
         #  being reused and confused during the event loop)
         my $sock;
         $sock->close while( $sock = shift @ToClose );
-
-        print STDERR "Event loop ending; restarting.\n";
     }
+
+    $class->DebugMsg( 1, "Poll error on %s", $Poll );
     exit 0;
 }
 
