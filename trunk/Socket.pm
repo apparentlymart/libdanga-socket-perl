@@ -38,7 +38,7 @@ use constant TCP_CORK => 3; # FIXME: not hard-coded (Linux-specific too)
 use constant DebugLevel => 0;
 
 # for epoll definitions:
-require 'syscall.ph';
+our $HAVE_SYSCALL_PH = eval { require 'syscall.ph'; 1 } || eval { require 'sys/syscall.ph'; 1 };
 
 # Explicitly define the poll constants, as either one set or the other won't be
 # loaded. They're also badly implemented in IO::Epoll:
@@ -669,12 +669,15 @@ sub as_string {
 # epoll_create wrapper
 # ARGS: (size)
 sub epoll_create {
-    syscall(&SYS_epoll_create, $_[0]);
+    return -1 unless $HAVE_SYSCALL_PH;
+    my $epfd = eval { syscall(&SYS_epoll_create, $_[0]) };
+    return -1 if $@;
+    return $epfd;
 }
 
 # epoll_ctl wrapper
 # ARGS: (epfd, op, fd, events)
-our $SYS_epoll_ctl = &SYS_epoll_ctl;
+our $SYS_epoll_ctl = eval { &SYS_epoll_ctl };
 sub epoll_ctl {
     syscall($SYS_epoll_ctl, $_[0]+0, $_[1]+0, $_[2]+0, pack("LLL", $_[3], $_[2]));
 }
@@ -684,7 +687,7 @@ sub epoll_ctl {
 #  arrayref: values modified to be [$fd, $event]
 our $epoll_wait_events;
 our $epoll_wait_size = 0;
-our $SYS_epoll_wait = &SYS_epoll_wait;
+our $SYS_epoll_wait = eval { &SYS_epoll_wait };
 sub epoll_wait {
     # resize our static buffer if requested size is bigger than we've ever done
     if ($_[1] > $epoll_wait_size) {
