@@ -1,0 +1,19 @@
+1.25: (2004-10-22)
+
+   -- move the syscall.ph require into "package main" rather than stealing
+      all its definitions into our namespace.  now other modules can
+      use syscall.ph and Danga::Socket at the same time (as long as they're
+      also polite and load it into main)  (NOTE: if you know a better way
+      to do this, let us know...)
+
+1.24: (2004-10-21)
+
+   -- ability to steal the underlying socket from the Danga::Socket
+      object.  this is useful if a caller wants to hold onto the socket
+      but destroy the Danga::Socket object (previously the Danga::Socket
+      close would close the underlying socket)
+
+1.22: (2004-10-21)
+
+   -- minimal POD docs
+   -- first public release
