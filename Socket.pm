@@ -479,6 +479,7 @@ sub tcp_cork {
 ### thing as calling close, except it gives you the socket to use.
 sub steal_socket {
     my Danga::Socket $self = $_[0];
+    return if $self->{closed};
 
     # cleanup does most of the work of closing this socket
     $self->_cleanup();
@@ -486,8 +487,6 @@ sub steal_socket {
     # now undef our internal sock and fd structures so we don't use them
     my $sock = $self->{sock};
     $self->{sock} = undef;
-
-    # now return the socket
     return $sock;
 }
 
@@ -495,6 +494,7 @@ sub steal_socket {
 ### Close the socket. The I<reason> argument will be used in debugging messages.
 sub close {
     my Danga::Socket $self = $_[0];
+    return if $self->{closed};
 
     # print out debugging info for this close
     if (DebugLevel) {
