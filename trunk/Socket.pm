@@ -630,10 +630,20 @@ sub peer_addr_string {
     my Danga::Socket $self = shift;
     my $pn = getpeername($self->{sock}) or return undef;
     my ($port, $iaddr) = Socket::sockaddr_in($pn);
-    return Socket::inet_ntoa($iaddr);
+    return Socket::inet_ntoa($iaddr) . ":$port";
 }
 
-
+### METHOD: as_string()
+### Returns a string describing this socket.
+sub as_string {
+    my Danga::Socket $self = shift;
+    my $ret = ref($self) . ": " . ($self->{closed} ? "closed" : "open");
+    my $peer = $self->peer_addr_string;
+    if ($peer) {
+        $ret .= " to " . $self->peer_addr_string;
+    }
+    return $ret;
+}
 
 
 1;
