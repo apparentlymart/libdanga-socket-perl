@@ -1,6 +1,21 @@
-######################################################################
-# Base class for all socket types
-######################################################################
+###########################################################################
+
+=head1 NAME
+
+Danga::Socket - Event-driven async IO class
+
+=head1 SYNOPSIS
+
+  use base ('Danga::Socket');
+
+=head1 DESCRIPTION
+
+This is an abstract base class which provides the basic framework for
+event-driven asynchronous IO.
+
+=cut
+
+###########################################################################
 
 package Danga::Socket;
 use strict;
@@ -105,7 +120,7 @@ sub init_poller
     $Epoll = eval { epoll_create(1024); };
     $HaveEpoll = $Epoll >= 0;
     if ($HaveEpoll) {
-        *EventLoop = *EpollEventLoop;            
+        *EventLoop = *EpollEventLoop;
     } else {
         require IO::Poll;
         $Poll = new IO::Poll or
