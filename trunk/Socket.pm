@@ -74,8 +74,13 @@ perlbal, mogilefsd, or ddlockd.
 
 =head1 AUTHORS
 
-Brad Fitzpatrick <brad@danga.com>, Michael Granger <ged@danga.com>,
-Mark Smith <marksmith@danga.com>
+Brad Fitzpatrick <brad@danga.com> - author
+
+Michael Granger <ged@danga.com> - docs, testing
+
+Mark Smith <junior@danga.com> - contributor, heavy user, testing
+
+Matt Sergeant <matt@sergeant.org> - kqueue support
 
 =head1 BUGS
 
@@ -169,12 +174,16 @@ use constant POLLERR       => 8;
 use constant POLLHUP       => 16;
 use constant POLLNVAL      => 32;
 
+our $HAVE_KQUEUE = eval { require IO::KQueue; 1 };
+
 # keep track of active clients
 our (
      $HaveEpoll,                 # Flag -- is epoll available?  initially undefined.
+     $HaveKQueue,
      %DescriptorMap,             # fd (num) -> Danga::Socket object
      %PushBackSet,               # fd (num) -> Danga::Socket (fds with pushed back read data)
      $Epoll,                     # Global epoll fd (for epoll mode only)
+     $KQueue,                    # Global kqueue fd (for kqueue mode only)
      @ToClose,                   # sockets to close when event loop is done
      %OtherFds,                  # A hash of "other" (non-Danga::Socket) file
                                  # descriptors for the event loop to track.
@@ -267,13 +276,24 @@ sub DescriptorMap {
 
 sub init_poller
 {
-    return if defined $HaveEpoll;
-
-    $Epoll = eval { epoll_create(1024); };
-    $HaveEpoll = $Epoll >= 0;
-    if ($HaveEpoll) {
-        *EventLoop = *EpollEventLoop;
-    } else {
+    return if defined $HaveEpoll || $HaveKQueue;
+    
+    if ($HAVE_KQUEUE) {
+        $KQueue = IO::KQueue->new();
+        $HaveKQueue = $KQueue >= 0;
+        if ($HaveKQueue) {
+            *EventLoop = *KQueueEventLoop;
+        }
+    }
+    else {
+        $Epoll = eval { epoll_create(1024); };
+        $HaveEpoll = $Epoll >= 0;
+        if ($HaveEpoll) {
+            *EventLoop = *EpollEventLoop;
+        }
+    }
+    
+    if (!$HaveEpoll && !$HaveKQueue) {
         require IO::Poll;
         *EventLoop = *PollEventLoop;
     }
@@ -288,6 +308,8 @@ sub EventLoop {
 
     if ($HaveEpoll) {
         EpollEventLoop($class);
+    } elsif ($HaveKQueue) {
+        KQueueEventLoop($class);
     } else {
         PollEventLoop($class);
     }
@@ -486,6 +508,57 @@ sub PollEventLoop {
     exit 0;
 }
 
+### The kqueue-based event loop. Gets installed as EventLoop if IO::KQueue works
+### okay.
+sub KQueueEventLoop {
+    my $class = shift;
+    
+    foreach my $fd (keys %OtherFds) {
+        $KQueue->EV_SET($fd, IO::KQueue::EVFILT_READ(), IO::KQueue::EV_ADD());
+    }
+    
+    while (1) {
+        my @ret = $KQueue->kevent(1000);
+        
+        if (!@ret) {
+            foreach my $fd ( keys %DescriptorMap ) {
+                my Danga::Socket $sock = $DescriptorMap{$fd};
+                if ($sock->can('ticker')) {
+                    $sock->ticker;
+                }
+            }
+        }
+        
+        foreach my $kev (@ret) {
+            my ($fd, $filter, $flags, $fflags) = @$kev;
+            
+            my Danga::Socket $pob = $DescriptorMap{$fd};
+            
+            if (!$pob) {
+                if (my $code = $OtherFds{$fd}) {
+                    $code->($filter);
+                }
+                next;
+            }
+            
+            DebugLevel >= 1 && $class->DebugMsg("Event: fd=%d (%s), flags=%d \@ %s\n",
+                                                        $fd, ref($pob), $flags, time);
+            
+            $pob->event_read  if $filter == IO::KQueue::EVFILT_READ()  && !$pob->{closed};
+            $pob->event_write if $filter == IO::KQueue::EVFILT_WRITE() && !$pob->{closed};
+            if ($flags ==  IO::KQueue::EV_EOF() && !$pob->{closed}) {
+                if ($fflags) {
+                    $pob->event_err;
+                } else {
+                    $pob->event_hup;
+                }
+            }
+        }
+        return unless PostEventLoop();
+    }
+    
+    exit(0);
+}
 
 ### (CLASS) METHOD: DebugMsg( $format, @args )
 ### Print the debugging message specified by the C<sprintf>-style I<format> and
@@ -523,7 +596,13 @@ sub new {
     if ($HaveEpoll) {
         epoll_ctl($Epoll, EPOLL_CTL_ADD, $fd, $self->{event_watch})
             and die "couldn't add epoll watch for $fd\n";
-
+    }
+    elsif ($HaveKQueue) {
+        # Add them to the queue but disabled for now
+        $KQueue->EV_SET($fd, IO::KQueue::EVFILT_READ(),
+                        IO::KQueue::EV_ADD() | IO::KQueue::EV_DISABLE());
+        $KQueue->EV_SET($fd, IO::KQueue::EVFILT_WRITE(),
+                        IO::KQueue::EV_ADD() | IO::KQueue::EV_DISABLE());
     }
 
     $DescriptorMap{$fd} = $self;
@@ -716,7 +795,7 @@ sub write {
                 undef $bref;
                 next WRITE;
             }
-            die "Write error: $@";
+            die "Write error: $@ <$bref>";
         }
 
         my $to_write = $len - $self->{write_buf_offset};
@@ -860,12 +939,17 @@ sub watch_read {
 
     my $val = shift;
     my $event = $self->{event_watch};
+    
     $event &= ~POLLIN if ! $val;
     $event |=  POLLIN if   $val;
-
+    
     # If it changed, set it
     if ($event != $self->{event_watch}) {
-        if ($HaveEpoll) {
+        if ($HaveKQueue) {
+            $KQueue->EV_SET($self->{fd}, IO::KQueue::EVFILT_READ(),
+                            $val ? IO::KQueue::EV_ENABLE() : IO::KQueue::EV_DISABLE());
+        }
+        elsif ($HaveEpoll) {
             epoll_ctl($Epoll, EPOLL_CTL_MOD, $self->{fd}, $event)
                 and $self->dump_error("couldn't modify epoll settings for $self->{fd} " .
                                       "from $self->{event_watch} -> $event: $! (" . ($!+0) . ")");
@@ -882,12 +966,17 @@ sub watch_write {
 
     my $val = shift;
     my $event = $self->{event_watch};
+    
     $event &= ~POLLOUT if ! $val;
     $event |=  POLLOUT if   $val;
 
     # If it changed, set it
     if ($event != $self->{event_watch}) {
-        if ($HaveEpoll) {
+        if ($HaveKQueue) {
+            $KQueue->EV_SET($self->{fd}, IO::KQueue::EVFILT_WRITE(),
+                            $val ? IO::KQueue::EV_ENABLE() : IO::KQueue::EV_DISABLE());
+        }
+        elsif ($HaveEpoll) {
             epoll_ctl($Epoll, EPOLL_CTL_MOD, $self->{fd}, $event)
                 and $self->dump_error("couldn't modify epoll settings for $self->{fd} " .
                                       "from $self->{event_watch} -> $event: $! (" . ($!+0) . ")");
