@@ -849,7 +849,9 @@ sub peer_addr_string {
 ### Returns a string describing this socket.
 sub as_string {
     my Danga::Socket $self = shift;
-    my $ret = ref($self) . ": " . ($self->{closed} ? "closed" : "open");
+    my $rw = "(" . ($self->{event_watch} & POLLIN ? 'R' : '') .
+                   ($self->{event_watch} & POLLOUT ? 'W' : '') . ")";
+    my $ret = ref($self) . "$rw: " . ($self->{closed} ? "closed" : "open");
     my $peer = $self->peer_addr_string;
     if ($peer) {
         $ret .= " to " . $self->peer_addr_string;
