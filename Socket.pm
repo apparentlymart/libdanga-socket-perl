@@ -328,8 +328,15 @@ sub tcp_cork {
     my $val = shift;
 
     # FIXME: Linux-specific.
-    setsockopt($self->{sock}, IPPROTO_TCP, TCP_CORK,
-           pack("l", $val ? 1 : 0))   || die "setsockopt: $!";
+    my $rv = setsockopt($self->{sock}, IPPROTO_TCP, TCP_CORK,
+           pack("l", $val ? 1 : 0));
+
+    # if we failed, close (if we're not already) and warn about the error
+    unless ($rv) {
+        $self->close('tcp_cork_failed')
+            unless $self->{closed};
+        warn "setsockopt: $!";
+    }
 }
 
 ### METHOD: close( [$reason] )
