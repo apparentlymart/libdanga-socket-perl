@@ -20,6 +20,11 @@ use Carp qw{croak confess};
 
 use constant TCP_CORK => 3; # FIXME: not hard-coded (Linux-specific too)
 
+use constant DebugLevel => 0;
+
+# for epoll definitions:
+require 'syscall.ph';
+
 # Explicitly define the poll constants, as either one set or the other won't be
 # loaded. They're also badly implemented in IO::Epoll:
 # The IO::Epoll module is buggy in that it doesn't export constants efficiently
@@ -38,31 +43,18 @@ use constant POLLOUT       => 4;
 use constant POLLERR       => 8;
 use constant POLLHUP       => 16;
 
-
 # keep track of active clients
 our (
-    $HaveEpoll,                 # Flag -- is IO::Epoll available?
+    $HaveEpoll,                 # Flag -- is epoll available?  initially undefined.
     %DescriptorMap,             # fd (num) -> Danga::Socket object
     $Poll,                      # Global poll object (for IO::Poll only)
     $Epoll,                     # Global epoll fd (for epoll mode only)
     @ToClose,                   # sockets to close when event loop is done
-    $DebugLevel,                # Global debugging level
     %OtherFds,                  # A hash of "other" (non-Danga::Socket) file
                                 # descriptors for the event loop to track.
 );
 
-$DebugLevel = 0;
 %OtherFds = ();
-
-# Try to load IO::Epoll, falling back to IO::Poll if that doesn't work
-$HaveEpoll = eval qq{ use IO::Epoll qw{epoll_create epoll_ctl epoll_wait}; 1 };
-if ( $HaveEpoll ) {
-    *EventLoop = *EpollEventLoop;
-} else {
-    require IO::Poll;
-    *EventLoop = *PollEventLoop;
-}
-
 
 #####################################################################
 ### C L A S S   M E T H O D S
@@ -71,16 +63,6 @@ if ( $HaveEpoll ) {
 ### (CLASS) METHOD: HaveEpoll()
 ### Returns a true value if this class will use IO::Epoll for async IO.
 sub HaveEpoll { $HaveEpoll };
-
-
-### (CLASS) METHOD: DebugLevel( $level )
-### Set Danga::Socket's global debugging level, which affects all
-### Danga::Socket objects.
-sub DebugLevel {
-    my $class = shift;
-    $DebugLevel = shift() + 0 if @_;
-    return $DebugLevel;
-}
 
 ### (CLASS) METHOD: WatchedSockets()
 ### Returns the number of file descriptors which are registered with the global
@@ -132,10 +114,15 @@ sub EpollEventLoop {
     }
 
     while (1) {
-        # get up to 50 events, no timeout (-1)
-        while (my $events = epoll_wait($Epoll, 50, -1)) {
+        my @events;
+        my $i;
+        my $evcount;
+        # get up to 1000 events, no timeout (-1)
+        while ($evcount = epoll_wait($Epoll, 1000, -1, \@events)) {
           EVENT:
-            foreach my $ev (@$events) {
+            for ($i=0; $i<$evcount; $i++) {
+                my $ev = $events[$i];
+
                 # it's possible epoll_wait returned many events, including some at the end
                 # that ones in the front triggered unregister-interest actions.  if we
                 # can't find the %sock entry, it's because we're no longer interested
@@ -152,8 +139,8 @@ sub EpollEventLoop {
                     next;
                 }
 
-                $class->DebugMsg( 1, "Event: fd=%d (%s), state=%d \@ %s\n",
-                                  $ev->[0], ref($pob), $ev->[1], time() );
+                DebugLevel >= 1 && $class->DebugMsg("Event: fd=%d (%s), state=%d \@ %s\n",
+                                                    $ev->[0], ref($pob), $ev->[1], time);
 
                 my $state = $ev->[1];
                 $pob->event_read   if $state & EPOLLIN && ! $pob->{closed};
@@ -185,7 +172,7 @@ sub PollEventLoop {
 
     $Poll ||= new IO::Poll or
         die "# fail: new IO::Poll: $!\n";
-    $class->DebugMsg( 1, "Using IO::Poll object for PollEventLoop: %s\n", $Poll );
+    DebugLevel >= 1 && $class->DebugMsg("Using IO::Poll object for PollEventLoop: %s\n", $Poll);
 
     foreach my $fd ( keys %OtherFds ) {
         my $handle = IO::Handle->new_from_fd( $fd, "r" );
@@ -238,19 +225,17 @@ sub PollEventLoop {
         $sock->close while( $sock = shift @ToClose );
     }
 
-    $class->DebugMsg( 1, "Poll error on %s", $Poll );
+    DebugLevel >= 1 && $class->DebugMsg("Poll error on %s", $Poll);
     exit 0;
 }
 
 
-### (CLASS) METHOD: DebugMsg( $level, $format, @args )
+### (CLASS) METHOD: DebugMsg( $format, @args )
 ### Print the debugging message specified by the C<sprintf>-style I<format> and
-### I<args> if the global debug level is greater than or equal to I<level>.
+### I<args>
 sub DebugMsg {
-    my ( $class, $lvl, $fmt, @args ) = @_;
-
+    my ( $class, $fmt, @args ) = @_;
     chomp $fmt;
-    return unless $DebugLevel >= $lvl;
     printf STDERR ">>> $fmt\n", @args;
 }
 
@@ -271,26 +256,28 @@ sub new {
     $self->{write_buf_offset} = 0;
     $self->{write_buf_size} = 0;
     $self->{closed} = 0;
-    $self->{debug_level} = 0;
 
     $self->{event_watch} = POLLERR|POLLHUP;
 
     # Make the poll object if it hasn't been already
-    if ($HaveEpoll) {
-        if (! $Epoll) {
-            $Epoll = epoll_create(1024);
-            if ($Epoll < 0) {
-                die "# fail: epoll_create: $!\n";
-            }
+    unless (defined $HaveEpoll) {
+        $Epoll = eval { epoll_create(1024); };
+        $HaveEpoll = $Epoll >= 0;
+        if ($HaveEpoll) {
+            *EventLoop = *EpollEventLoop;            
+        } else {
+            require IO::Poll;
+            $Poll = new IO::Poll or
+                die "# fail: new IO::Poll: $!\n";
+            *EventLoop = *PollEventLoop;
         }
+    }
+
+    if ($HaveEpoll) {
         epoll_ctl($Epoll, EPOLL_CTL_ADD, $fd, $self->{event_watch})
             and die "couldn't add epoll watch for $fd\n";
 
     } else {
-        if (! $Poll) {
-            $Poll = new IO::Poll or
-                die "# fail: new IO::Poll: $!\n";
-        }
         $Poll->mask( $sock, $self->{event_watch} )
             or die "couldn't add poll watch for $fd\n";
     }
@@ -330,16 +317,16 @@ sub close {
     # preventing the object from being destroyed
     $self->{write_buf} = [];
 
-    if ( $self->{debug_level} || $DebugLevel ) {
+    if (DebugLevel) {
         my ($pkg, $filename, $line) = caller;
         print STDERR "Closing \#$fd due to $pkg/$filename/$line ($reason)\n";
     }
 
     if ($HaveEpoll) {
         if (epoll_ctl($Epoll, EPOLL_CTL_DEL, $fd, $self->{event_watch}) == 0) {
-            $self->debugmsg( 2, "Client %d disconnected.\n", $fd );
+            DebugLevel >= 1 && $self->debugmsg("Client %d disconnected.\n", $fd);
         } else {
-            $self->debugmsg( 1, "poll->remove failed on fd %d\n", $fd );
+            DebugLevel >= 1 && $self->debugmsg("poll->remove failed on fd %d\n", $fd);
         }
     } else {
         $Poll->remove( $self->{sock} ); # Return value is useless
@@ -442,19 +429,12 @@ sub write {
                 return $self->close("ECONNRESET");
             }
 
-            $self->debugmsg( 1, "Closing connection ($self) due to write error: $!\n" );
-
-            # FIXME: temporary debug:
-            if ($! == EBADF) {
-                $self->debugmsg( 1, "  -- fd=%d; closed=%d; event_watch=%d",
-                                 $self->{fd},
-                                 $self->{closed},
-                                 $self->{event_watch} );
-            }
+            DebugLevel >= 1 && $self->debugmsg("Closing connection ($self) due to write error: $!\n");
 
             return $self->close("write_error");
         } elsif ($written != $to_write) {
-            $self->debugmsg( 2, "Wrote PARTIAL %d bytes to %d", $written, $self->{fd} );
+            DebugLevel >= 2 && $self->debugmsg("Wrote PARTIAL %d bytes to %d",
+                                               $written, $self->{fd});
             if ($need_queue) {
                 push @{$self->{write_buf}}, $bref;
                 $self->{write_buf_size} += $len;
@@ -466,8 +446,8 @@ sub write {
             $self->watch_write(1);
             return 0;
         } elsif ($written == $to_write) {
-            $self->debugmsg( 2, "Wrote ALL %d bytes to %d (nq=%d)",
-                             $written, $self->{fd}, $need_queue );
+            DebugLevel >= 2 && $self->debugmsg("Wrote ALL %d bytes to %d (nq=%d)",
+                                               $written, $self->{fd}, $need_queue);
             $self->{write_buf_offset} = 0;
 
             # this was our only write, so we can return immediately
@@ -495,11 +475,11 @@ sub read {
     my $sock = $self->{sock};
 
     my $res = sysread($sock, $buf, $bytes, 0);
-    $self->debugmsg( 2, "sysread = %d; \$! = %d", $res, $! );
+    DebugLevel >= 2 && $self->debugmsg("sysread = %d; \$! = %d", $res, $!);
 
     if (! $res && $! != EWOULDBLOCK) {
         # catches 0=conn closed or undef=error
-        $self->debugmsg( 2, "Fd \#%d read hit the end of the road.", $self->{fd} );
+        DebugLevel >= 2 && $self->debugmsg("Fd \#%d read hit the end of the road.", $self->{fd});
         return undef;
     }
 
@@ -514,8 +494,8 @@ sub drain_read_buf_to {
     my ($self, $dest) = @_;
     return unless $self->{read_ahead};
 
-    $self->debugmsg( 2, "drain_read_buf_to (%d -> %d): %d bytes",
-                     $self->{fd}, $dest->{fd}, $self->{read_ahead} );
+    DebugLevel >= 2 && $self->debugmsg("drain_read_buf_to (%d -> %d): %d bytes",
+                                       $self->{fd}, $dest->{fd}, $self->{read_ahead});
 
     while (my $bref = shift @{$self->{read_buf}}) {
         $dest->write($bref);
@@ -609,16 +589,15 @@ sub watch_write {
 }
 
 
-### METHOD: debugmsg( $level, $format, @args )
+### METHOD: debugmsg( $format, @args )
 ### Print the debugging message specified by the C<sprintf>-style I<format> and
 ### I<args> if the object's C<debug_level> is greater than or equal to the given
 ### I<level>.
 sub debugmsg {
-    my ( $self, $lvl, $fmt, @args ) = @_;
-    confess "Not an object" if not ref $self;
+    my ( $self, $fmt, @args ) = @_;
+    confess "Not an object" unless ref $self;
 
     chomp $fmt;
-    return unless $self->{debug_level} >= $lvl || $DebugLevel >= $lvl;
     printf STDERR ">>> $fmt\n", @args;
 }
 
@@ -644,6 +623,41 @@ sub as_string {
     }
     return $ret;
 }
+
+#####################################################################
+### U T I L I T Y   F U N C T I O N S
+#####################################################################
+
+# epoll_create wrapper
+# ARGS: (size)
+sub epoll_create {
+    syscall(&SYS_epoll_create, $_[0]);
+}
+
+# epoll_ctl wrapper
+# ARGS: (epfd, op, fd, events)
+sub epoll_ctl {
+    syscall(&SYS_epoll_ctl, $_[0]+0, $_[1]+0, $_[2]+0, pack("LLL", $_[3], $_[2]));
+}
+
+# epoll_wait wrapper
+# ARGS: (epfd, maxevents, timeout, arrayref)
+#  arrayref: values modified to be [$fd, $event]
+our $epoll_wait_events;
+our $epoll_wait_size = 0;
+sub epoll_wait {
+    # resize our static buffer if requested size is bigger than we've ever done
+    if ($_[1] > $epoll_wait_size) {
+        $epoll_wait_size = $_[1];
+        $epoll_wait_events = pack("LLL") x $epoll_wait_size;
+    }
+    my $ct = syscall(&SYS_epoll_wait, $_[0]+0, $epoll_wait_events, $_[1]+0, $_[2]+0);
+    for ($_ = 0; $_ < $ct; $_++) {
+        @{$_[3]->[$_]}[1,0] = unpack("LL", substr($epoll_wait_events, 12*$_, 8));
+    }
+    return $ct;
+}
+
 
 
 1;
