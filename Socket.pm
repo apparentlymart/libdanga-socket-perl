@@ -33,7 +33,6 @@ use constant EPOLL_CTL_ADD => 1;
 use constant EPOLL_CTL_DEL => 2;
 use constant EPOLL_CTL_MOD => 3;
 
-use constant POLLNVAL      => 0;
 use constant POLLIN        => 1;
 use constant POLLOUT       => 4;
 use constant POLLERR       => 8;
@@ -44,7 +43,8 @@ use constant POLLHUP       => 16;
 our (
     $HaveEpoll,                 # Flag -- is IO::Epoll available?
     %DescriptorMap,             # fd (num) -> Danga::Socket object
-    $Poll,                      # Global poll object
+    $Poll,                      # Global poll object (for IO::Poll only)
+    $Epoll,                     # Global epoll fd (for epoll mode only)
     @ToClose,                   # sockets to close when event loop is done
     $DebugLevel,                # Global debugging level
     %OtherFds,                  # A hash of "other" (non-Danga::Socket) file
@@ -55,7 +55,7 @@ $DebugLevel = 0;
 %OtherFds = ();
 
 # Try to load IO::Epoll, falling back to IO::Poll if that doesn't work
-$HaveEpoll = eval qq{ use IO::Epoll qw{epoll_ctl epoll_wait}; 1 };
+$HaveEpoll = eval qq{ use IO::Epoll qw{epoll_create epoll_ctl epoll_wait}; 1 };
 if ( $HaveEpoll ) {
     *EventLoop = *EpollEventLoop;
 } else {
@@ -96,10 +96,6 @@ sub WatchedSockets {
 ### current event loop.
 sub ToClose { return @ToClose; }
 
-### (CLASS) METHOD: PollObject()
-### Return the poll object being used to check for IO events.
-sub PollObject { return $Poll; }
-
 
 ### (CLASS) METHOD: OtherFds( [%fdmap] )
 ### Get/set the hash of file descriptors that need processing in parallel with
@@ -130,15 +126,14 @@ sub EventLoop {}
 ### okay.
 sub EpollEventLoop {
     my $class = shift;
-    my $epoll = $Poll->[3];
 
     foreach my $fd ( keys %OtherFds ) {
-        epoll_ctl($epoll, EPOLL_CTL_ADD, $fd, EPOLLIN);
+        epoll_ctl($Epoll, EPOLL_CTL_ADD, $fd, EPOLLIN);
     }
 
     while (1) {
         # get up to 50 events, no timeout (-1)
-        while (my $events = epoll_wait($epoll, 50, -1)) {
+        while (my $events = epoll_wait($Epoll, 50, -1)) {
           EVENT:
             foreach my $ev (@$events) {
                 # it's possible epoll_wait returned many events, including some at the end
@@ -266,20 +261,27 @@ sub new {
     $self->{closed} = 0;
     $self->{debug_level} = 0;
 
+    $self->{event_watch} = POLLERR|POLLHUP;
+
     # Make the poll object if it hasn't been already
-    unless ($Poll) {
-        if ( $HaveEpoll ) {
-            $Poll = new IO::Epoll ( 1024 ) or
-                die "# fail: new IO::Epoll: $!\n";
-        } else {
+    if ($HaveEpoll) {
+        if (! $Epoll) {
+            $Epoll = epoll_create(1024);
+            if ($Epoll < 0) {
+                die "# fail: epoll_create: $!\n";
+            }
+        }
+        epoll_ctl($Epoll, EPOLL_CTL_ADD, $fd, $self->{event_watch})
+            and die "couldn't add epoll watch for $fd\n";
+
+    } else {
+        if (! $Poll) {
             $Poll = new IO::Poll or
                 die "# fail: new IO::Poll: $!\n";
         }
+        $Poll->mask( $sock, $self->{event_watch} )
+            or die "couldn't add poll watch for $fd\n";
     }
-
-    $self->{event_watch} = POLLERR|POLLHUP;
-    $Poll->mask( $sock, $self->{event_watch} )
-        or die "couldn't add poll watch for $fd\n";
 
     $DescriptorMap{$fd} = $self;
     return $self;
@@ -321,12 +323,14 @@ sub close {
         print STDERR "Closing \#$fd due to $pkg/$filename/$line ($reason)\n";
     }
 
-    $Poll->remove( $self->{sock} ); # Return value is useless
-
-    if ( $Poll->mask($self->{sock}) ) {
-        $self->debugmsg( 1, "poll->remove failed on fd %d\n", $fd );
+    if ($HaveEpoll) {
+        if (epoll_ctl($Epoll, EPOLL_CTL_DEL, $fd, $self->{event_watch}) == 0) {
+            $self->debugmsg( 2, "Client %d disconnected.\n", $fd );
+        } else {
+            $self->debugmsg( 1, "poll->remove failed on fd %d\n", $fd );
+        }
     } else {
-        $self->debugmsg( 2, "Client %d disconnected.\n", $fd );
+        $Poll->remove( $self->{sock} ); # Return value is useless
     }
 
     delete $DescriptorMap{$fd};
@@ -552,9 +556,15 @@ sub watch_read {
 
     # If it changed, set it
     if ($event != $self->{event_watch}) {
-        $Poll->mask( $self->{sock}, $event )
-            or print STDERR "couldn't modify epoll settings for $self->{fd} " .
+        if ($HaveEpoll) {
+            epoll_ctl($Epoll, EPOLL_CTL_MOD, $self->{fd}, $event)
+                and print STDERR "couldn't modify epoll settings for $self->{fd} " .
                 "($self) from $self->{event_watch} -> $event\n";
+        } else {
+            $Poll->mask( $self->{sock}, $event )
+                or print STDERR "couldn't modify epoll settings for $self->{fd} " .
+                "($self) from $self->{event_watch} -> $event\n";
+        }
         $self->{event_watch} = $event;
     }
 }
@@ -573,9 +583,15 @@ sub watch_write {
 
     # If it changed, set it
     if ($event != $self->{event_watch}) {
-        $Poll->mask( $self->{sock}, $event )
-            or print STDERR "couldn't modify epoll settings for $self->{fd} ".
+        if ($HaveEpoll) {
+            epoll_ctl($Epoll, EPOLL_CTL_MOD, $self->{fd}, $event)
+                and print STDERR "couldn't modify epoll settings for $self->{fd} " .
                 "($self) from $self->{event_watch} -> $event\n";
+        } else {
+            $Poll->mask( $self->{sock}, $event )
+                or print STDERR "couldn't modify epoll settings for $self->{fd} ".
+                "($self) from $self->{event_watch} -> $event\n";
+        }
         $self->{event_watch} = $event;
     }
 }
