@@ -98,10 +98,35 @@ sub DescriptorMap {
 *descriptor_map = *DescriptorMap;
 *get_sock_ref = *DescriptorMap;
 
+sub init_poller
+{
+    return if defined $HaveEpoll;
+
+    $Epoll = eval { epoll_create(1024); };
+    $HaveEpoll = $Epoll >= 0;
+    if ($HaveEpoll) {
+        *EventLoop = *EpollEventLoop;            
+    } else {
+        require IO::Poll;
+        $Poll = new IO::Poll or
+            die "# fail: new IO::Poll: $!\n";
+        *EventLoop = *PollEventLoop;
+    }
+}
 
 ### FUNCTION: EventLoop()
 ### Start processing IO events.
-sub EventLoop { die "Placeholder eventloop not replaced." }
+sub EventLoop {
+    my $class = shift;
+
+    init_poller();
+
+    if ($HaveEpoll) {
+        EpollEventLoop($class);
+    } else {
+        PollEventLoop($class);
+    }
+}
 
 
 ### The epoll-based event loop. Gets installed as EventLoop if IO::Epoll loads
@@ -259,19 +284,7 @@ sub new {
 
     $self->{event_watch} = POLLERR|POLLHUP;
 
-    # Make the poll object if it hasn't been already
-    unless (defined $HaveEpoll) {
-        $Epoll = eval { epoll_create(1024); };
-        $HaveEpoll = $Epoll >= 0;
-        if ($HaveEpoll) {
-            *EventLoop = *EpollEventLoop;            
-        } else {
-            require IO::Poll;
-            $Poll = new IO::Poll or
-                die "# fail: new IO::Poll: $!\n";
-            *EventLoop = *PollEventLoop;
-        }
-    }
+    init_poller();
 
     if ($HaveEpoll) {
         epoll_ctl($Epoll, EPOLL_CTL_ADD, $fd, $self->{event_watch})
@@ -298,6 +311,7 @@ sub tcp_cork {
     my Danga::Socket $self = shift;
     my $val = shift;
 
+    # FIXME: Linux-specific.
     setsockopt($self->{sock}, IPPROTO_TCP, TCP_CORK,
            pack("l", $val ? 1 : 0))   || die "setsockopt: $!";
 }
@@ -645,8 +659,9 @@ sub epoll_create {
 
 # epoll_ctl wrapper
 # ARGS: (epfd, op, fd, events)
+our $SYS_epoll_ctl = &SYS_epoll_ctl;
 sub epoll_ctl {
-    syscall(&SYS_epoll_ctl, $_[0]+0, $_[1]+0, $_[2]+0, pack("LLL", $_[3], $_[2]));
+    syscall($SYS_epoll_ctl, $_[0]+0, $_[1]+0, $_[2]+0, pack("LLL", $_[3], $_[2]));
 }
 
 # epoll_wait wrapper
@@ -654,13 +669,14 @@ sub epoll_ctl {
 #  arrayref: values modified to be [$fd, $event]
 our $epoll_wait_events;
 our $epoll_wait_size = 0;
+our $SYS_epoll_wait = &SYS_epoll_wait;
 sub epoll_wait {
     # resize our static buffer if requested size is bigger than we've ever done
     if ($_[1] > $epoll_wait_size) {
         $epoll_wait_size = $_[1];
         $epoll_wait_events = pack("LLL") x $epoll_wait_size;
     }
-    my $ct = syscall(&SYS_epoll_wait, $_[0]+0, $epoll_wait_events, $_[1]+0, $_[2]+0);
+    my $ct = syscall($SYS_epoll_wait, $_[0]+0, $epoll_wait_events, $_[1]+0, $_[2]+0);
     for ($_ = 0; $_ < $ct; $_++) {
         @{$_[3]->[$_]}[1,0] = unpack("LL", substr($epoll_wait_events, 12*$_, 8));
     }
