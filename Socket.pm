@@ -63,7 +63,6 @@ use constant POLLNVAL      => 32;
 our (
     $HaveEpoll,                 # Flag -- is epoll available?  initially undefined.
     %DescriptorMap,             # fd (num) -> Danga::Socket object
-    $Poll,                      # Global poll object (for IO::Poll only)
     $Epoll,                     # Global epoll fd (for epoll mode only)
     @ToClose,                   # sockets to close when event loop is done
     %OtherFds,                  # A hash of "other" (non-Danga::Socket) file
@@ -124,8 +123,6 @@ sub init_poller
         *EventLoop = *EpollEventLoop;
     } else {
         require IO::Poll;
-        $Poll = new IO::Poll or
-            die "# fail: new IO::Poll: $!\n";
         *EventLoop = *PollEventLoop;
     }
 }
@@ -170,12 +167,13 @@ sub EpollEventLoop {
                 # in that event.
                 my Danga::Socket $pob = $DescriptorMap{$ev->[0]};
                 my $code;
+                my $state = $ev->[1];
 
                 # if we didn't find a Perlbal::Socket subclass for that fd, try other
                 # pseudo-registered (above) fds.
                 if (! $pob) {
                     if (my $code = $OtherFds{$ev->[0]}) {
-                        $code->();
+                        $code->($state);
                     }
                     next;
                 }
@@ -183,7 +181,6 @@ sub EpollEventLoop {
                 DebugLevel >= 1 && $class->DebugMsg("Event: fd=%d (%s), state=%d \@ %s\n",
                                                     $ev->[0], ref($pob), $ev->[1], time);
 
-                my $state = $ev->[1];
                 $pob->event_read   if $state & EPOLLIN && ! $pob->{closed};
                 $pob->event_write  if $state & EPOLLOUT && ! $pob->{closed};
                 if ($state & (EPOLLERR|EPOLLHUP)) {
@@ -209,68 +206,49 @@ sub PollEventLoop {
     my $class = shift;
 
     my Danga::Socket $pob;
-    my $fd;
 
-    $Poll ||= new IO::Poll or
-        die "# fail: new IO::Poll: $!\n";
-    DebugLevel >= 1 && $class->DebugMsg("Using IO::Poll object for PollEventLoop: %s\n", $Poll);
+    while (1) {
+        # the following sets up @poll as a series of ($poll,$event_mask)
+        # items, then uses IO::Poll::_poll, implemented in XS, which
+        # modifies the array in place with the even elements being
+        # replaced with the event masks that occured.
+        my @poll;
+        foreach my $fd ( keys %OtherFds ) {
+            push @poll, $fd, POLLIN;
+        }
+        while ( my ($fd, $sock) = each %DescriptorMap ) {
+            push @poll, $fd, $sock->{event_watch};
+        }
+        return 0 unless @poll;
 
-    foreach my $fd ( keys %OtherFds ) {
-        my $handle = IO::Handle->new_from_fd( $fd, "r" );
-        $Poll->mask( $handle, POLLIN );
-    }
-
-    my $count;
-  POLL: while (( $count = $Poll->poll )) {
-        next POLL unless $count;
+        my $count = IO::Poll::_poll(-1, @poll);
+        next unless $count;
 
         # Fetch handles with read events
-        foreach my $handle ( $Poll->handles(POLLIN) ) {
-            $fd = fileno $handle;
+        while (@poll) {
+            my ($fd, $state) = splice(@poll, 0, 2);
+            next unless $state;
+
             $pob = $DescriptorMap{$fd};
 
             if ( !$pob && (my $code = $OtherFds{$fd}) ) {
-                $code->();
+                $code->($state);
                 next;
             }
 
-            $pob->event_read unless $pob->{closed};
-        }
-
-        # Write events
-        foreach my $handle ( $Poll->handles(POLLOUT) ) {
-            $fd = fileno $handle;
-            $pob = $DescriptorMap{$fd};
-            $pob->event_write unless $pob->{closed};
-        }
-
-        # Error events
-        foreach my $handle ( $Poll->handles(POLLERR) ) {
-            $fd = fileno $handle;
-            $pob = $DescriptorMap{$fd};
-            $pob->event_err unless $pob->{closed};
-        }
-
-        # Hangup events
-        foreach my $handle ( $Poll->handles(POLLHUP) ) {
-            $fd = fileno $handle;
-            $pob = $DescriptorMap{$fd};
-            $pob->event_hup unless $pob->{closed};
-        }
-
-        # Invalid events
-        foreach my $handle ( $Poll->handles(POLLNVAL) ) {
-            $Poll->remove($handle);
+            $pob->event_read   if $state & POLLIN && ! $pob->{closed};
+            $pob->event_write  if $state & POLLOUT && ! $pob->{closed};
+            $pob->event_err    if $state & POLLERR && ! $pob->{closed};
+            $pob->event_hup    if $state & POLLHUP && ! $pob->{closed};
         }
 
         # now we can close sockets that wanted to close during our event processing.
         # (we didn't want to close them during the loop, as we didn't want fd numbers
         #  being reused and confused during the event loop)
         my $sock;
-        $sock->close while( $sock = shift @ToClose );
+        $sock->close while $sock = shift @ToClose;
     }
 
-    DebugLevel >= 1 && $class->DebugMsg("Poll error on %s", $Poll);
     exit 0;
 }
 
@@ -302,7 +280,7 @@ sub new {
     $self->{write_buf_size} = 0;
     $self->{closed} = 0;
 
-    $self->{event_watch} = POLLERR|POLLHUP;
+    $self->{event_watch} = POLLERR|POLLHUP|POLLNVAL;
 
     init_poller();
 
@@ -310,10 +288,7 @@ sub new {
         epoll_ctl($Epoll, EPOLL_CTL_ADD, $fd, $self->{event_watch})
             and die "couldn't add epoll watch for $fd\n";
 
-    } else {
-        $Poll->mask( $sock, $self->{event_watch} )
-            or die "couldn't add poll watch for $fd\n";
-    }
+    } 
 
     $DescriptorMap{$fd} = $self;
     return $self;
@@ -362,8 +337,6 @@ sub close {
         } else {
             DebugLevel >= 1 && $self->debugmsg("poll->remove failed on fd %d\n", $fd);
         }
-    } else {
-        $Poll->remove( $self->{sock} ); # Return value is useless
     }
 
     delete $DescriptorMap{$fd};
@@ -586,10 +559,6 @@ sub watch_read {
             epoll_ctl($Epoll, EPOLL_CTL_MOD, $self->{fd}, $event)
                 and print STDERR "couldn't modify epoll settings for $self->{fd} " .
                 "($self) from $self->{event_watch} -> $event\n";
-        } else {
-            $Poll->mask( $self->{sock}, $event )
-                or print STDERR "couldn't modify epoll settings for $self->{fd} " .
-                "($self) from $self->{event_watch} -> $event\n";
         }
         $self->{event_watch} = $event;
     }
@@ -612,10 +581,6 @@ sub watch_write {
         if ($HaveEpoll) {
             epoll_ctl($Epoll, EPOLL_CTL_MOD, $self->{fd}, $event)
                 and print STDERR "couldn't modify epoll settings for $self->{fd} " .
-                "($self) from $self->{event_watch} -> $event\n";
-        } else {
-            $Poll->mask( $self->{sock}, $event )
-                or print STDERR "couldn't modify epoll settings for $self->{fd} ".
                 "($self) from $self->{event_watch} -> $event\n";
         }
         $self->{event_watch} = $event;
