@@ -2,16 +2,101 @@
 
 =head1 NAME
 
-Danga::Socket - Event-driven async IO class
+Danga::Socket - Event loop and event-driven async socket base class
 
 =head1 SYNOPSIS
 
+  package My::Socket
+  use Danga::Socket;
   use base ('Danga::Socket');
+  use fields ('my_attribute');
+
+  sub new {
+     my My::Socket $self = shift;
+     $self = fields::new($self) unless ref $self;
+     $self->SUPER::new( @_ );
+
+     $self->{my_attribute} = 1234;
+     return $self;
+  }
+
+  sub event_err { ... }
+  sub event_hup { ... }
+  sub event_write { ... }
+  sub event_read { ... }
+  sub close { ... }
+
+  $my_sock->tcp_cork($bool);
+
+  # write returns 1 if all writes have gone through, or 0 if there
+  # are writes in queue
+  $my_sock->write($scalar);
+  $my_sock->write($scalarref);
+  $my_sock->write(sub { ... });  # run when previous data written
+  $my_sock->write(undef);        # kick-starts
+
+  # read max $bytecount bytes, or undef on connection closed
+  $scalar_ref = $my_sock->read($bytecount);
+
+  # watch for writability.  not needed with ->write().  write()
+  # will automatically turn on watch_write when you wrote too much
+  # and turn it off when done
+  $my_sock->watch_write($bool);
+
+  # watch for readability
+  $my_sock->watch_read($bool);
+
+  # if you read too much and want to push some back on
+  # readable queue.  (not incredibly well-tested)
+  $my_sock->push_back_read($buf); # scalar or scalar ref
+
+  Danga::Socket->AddOtherFds(..);
+  Danga::Socket->SetLoopTimeout(..);
+  Danga::Socket->DescriptorMap();
+  Danga::Socket->WatchedSockets();  # count of DescriptorMap keys
+  Danga::Socket->SetPostLoopCallback($code);
+  Danga::Socket->EventLoop();
 
 =head1 DESCRIPTION
 
 This is an abstract base class which provides the basic framework for
-event-driven asynchronous IO.
+event-driven asynchronous IO, designed to be fast.
+
+Callers subclass Danga::Socket.  Danga::Socket's constructor registers
+itself with the Danga::Socket event loop (which uses the efficient
+epoll on Linux 2.6) and invokes callbacks on the object for readability,
+writability, errors, and other conditions.
+
+=head1 MORE INFO
+
+For now, see servers using Danga::Socket for guidance.  For example:
+perlbal, mogilefsd, or ddlockd.
+
+=head1 AUTHORS
+
+Brad Fitzpatrick <brad@danga.com>, Michael Granger <ged@danga.com>,
+Mark Smith <marksmith@danga.com>
+
+=head1 BUGS
+
+Not documented.
+
+Doesn't use kqueue on FreeBSD because it looks hard to do without XS
+which this code happily avoids.  (epoll is implemented with only
+Perl's 'syscall')
+
+Syscall numbers 254, 255, and 256 are used when SYS_epoll_* constants
+aren't available, but those numbers are hard-coded values from the i386
+Linux architecture.
+
+The packed data used with the epoll syscalls is likely only to work on
+32-bit Linux x86.  None of this code has been tested much on other
+platforms or architectures.
+
+=head1 LICENSE
+
+License is granted to use and distribute this module under the same
+terms as Perl itself.
 
 =cut
 
