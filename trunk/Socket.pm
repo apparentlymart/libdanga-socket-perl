@@ -375,7 +375,7 @@ sub PollEventLoop {
         }
         return 0 unless @poll;
 
-        my $count = IO::Poll::_poll(-1, @poll);
+        my $count = IO::Poll::_poll($LoopTimeout, @poll);
         unless ($count) {
             return unless PostEventLoop();
             next;
