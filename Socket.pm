@@ -676,18 +676,19 @@ sub SetPostLoopCallback {
 ### U T I L I T Y   F U N C T I O N S
 #####################################################################
 
+our $SYS_epoll_create = eval { &SYS_epoll_create } || 254; # linux-ix86 default
+
 # epoll_create wrapper
 # ARGS: (size)
 sub epoll_create {
-    return -1 unless $HAVE_SYSCALL_PH;
-    my $epfd = eval { syscall(&SYS_epoll_create, $_[0]) };
+    my $epfd = eval { syscall($SYS_epoll_create, $_[0]) };
     return -1 if $@;
     return $epfd;
 }
 
 # epoll_ctl wrapper
 # ARGS: (epfd, op, fd, events)
-our $SYS_epoll_ctl = eval { &SYS_epoll_ctl };
+our $SYS_epoll_ctl = eval { &SYS_epoll_ctl } || 255; # linux-ix86 default
 sub epoll_ctl {
     syscall($SYS_epoll_ctl, $_[0]+0, $_[1]+0, $_[2]+0, pack("LLL", $_[3], $_[2]));
 }
@@ -697,7 +698,7 @@ sub epoll_ctl {
 #  arrayref: values modified to be [$fd, $event]
 our $epoll_wait_events;
 our $epoll_wait_size = 0;
-our $SYS_epoll_wait = eval { &SYS_epoll_wait };
+our $SYS_epoll_wait = eval { &SYS_epoll_wait } || 256; # linux-ix86 default
 sub epoll_wait {
     # resize our static buffer if requested size is bigger than we've ever done
     if ($_[1] > $epoll_wait_size) {
