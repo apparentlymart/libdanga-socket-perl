@@ -12,10 +12,25 @@ use fields qw(sock fd write_buf write_buf_offset write_buf_size
 use Errno qw(EINPROGRESS EWOULDBLOCK EISCONN
              EPIPE EAGAIN EBADF ECONNRESET);
 
-use Linux::AIO ();
 use Socket qw(IPPROTO_TCP);
 
 use constant TCP_CORK => 3; # FIXME: not hard-coded (Linux-specific too)
+
+# Explicitly define the poll constants, as either one set or the other won't be
+# loaded.
+use constant EPOLLIN       => 1;
+use constant EPOLLOUT      => 4;
+use constant EPOLLERR      => 8;
+use constant EPOLLHUP      => 16;
+use constant EPOLL_CTL_ADD => 1;
+use constant EPOLL_CTL_DEL => 2;
+use constant EPOLL_CTL_MOD => 3;
+
+use constant POLLNVAL      => 0;
+use constant POLLIN        => 1;
+use constant POLLOUT       => 4;
+use constant POLLERR       => 8;
+use constant POLLHUP       => 16;
 
 
 # keep track of active clients
@@ -29,23 +44,29 @@ our (
                                 # descriptors for the event loop to track.
 );
 
+$DebugLevel = 0;
+%OtherFds = ();
+
 # Try to load IO::Epoll, falling back to IO::Poll if that doesn't work
-eval { use IO::Epoll qw{:default :compat}; $HaveEpoll = 1 };
-if ( $@ ) {
-    require IO::Poll; IO::Epoll->import(); $HaveEpoll = 0;
-    *EventLoop = *PollEventLoop;
-    print STDERR "No IO::Epoll ($@): Falling back on IO::Poll";
-} else {
+$HaveEpoll = eval qq{ use IO::Epoll qw{}; 1 };
+if ( $HaveEpoll ) {
     *EventLoop = *EpollEventLoop;
+} else {
+    require IO::Poll; IO::Poll->import();
+    *EventLoop = *PollEventLoop;
 }
 
 
-$DebugLevel = 0;
+#####################################################################
+### C L A S S   M E T H O D S
+#####################################################################
 
-%OtherFds = ();
+### (CLASS) METHOD: HaveEpoll()
+### Returns a true value if this class will use IO::Epoll for async IO.
+sub HaveEpoll { $HaveEpoll };
 
 
-### (CLASS) METHOD: global_debug_level( $level )
+### (CLASS) METHOD: DebugLevel( $level )
 ### Set Danga::Socket's global debugging level, which affects all
 ### Danga::Socket objects.
 sub DebugLevel {
@@ -54,7 +75,7 @@ sub DebugLevel {
     return $DebugLevel;
 }
 
-### (CLASS) METHOD: watched_sockets()
+### (CLASS) METHOD: WatchedSockets()
 ### Returns the number of file descriptors which are registered with the global
 ### poll object.
 sub WatchedSockets {
@@ -78,11 +99,7 @@ sub PollObject { return $Poll; }
 ### the registered Danga::Socket objects.
 sub OtherFds {
     my $class = shift;
-
-    if ( @_ ) {
-        %OtherFds = @_;
-    }
-
+    if ( @_ ) { %OtherFds = @_ }
     return wantarray ? %OtherFds : \%OtherFds;
 }
 
@@ -92,7 +109,10 @@ sub OtherFds {
 sub EventLoop {}
 
 
+### The epoll-based event loop. Gets installed as EventLoop if IO::Epoll loads
+### okay.
 sub EpollEventLoop {
+    my $class = shift;
     my $epoll = $Poll->[3];
 
     foreach my $fd ( keys %OtherFds ) {
@@ -108,7 +128,7 @@ sub EpollEventLoop {
                 # that ones in the front triggered unregister-interest actions.  if we
                 # can't find the %sock entry, it's because we're no longer interested
                 # in that event.
-                my Perlbal::Socket $pob = $DescriptorMap{$ev->[0]};
+                my Danga::Socket $pob = $DescriptorMap{$ev->[0]};
                 my $code;
 
                 # if we didn't find a Perlbal::Socket subclass for that fd, try other
@@ -120,8 +140,8 @@ sub EpollEventLoop {
                     next;
                 }
 
-                print "Event: fd=$ev->[0] (", ref($pob), "), state=$ev->[1] \@ " . time() . "\n"
-                    if Perlbal::DEBUG >= 1;
+                $class->debugmsg( 1, "Event: fd=%d (%s), state=%d \@ %s\n",
+                                 $ev->[0], ref($pob), $ev->[1], time() );
 
                 my $state = $ev->[1];
                 $pob->event_read   if $state & EPOLLIN && ! $pob->{closed};
@@ -143,6 +163,8 @@ sub EpollEventLoop {
 }
 
 
+### The fallback IO::Poll-based event loop. Gets installed as EventLoop if
+### IO::Epoll fails to load.
 sub PollEventLoop {
 
     my Danga::Socket $pob;
@@ -197,6 +219,18 @@ sub PollEventLoop {
 }
 
 
+### (CLASS) METHOD: DebugMsg( $level, $format, @args )
+### Print the debugging message specified by the C<sprintf>-style I<format> and
+### I<args> if the global debug level is greater than or equal to I<level>.
+sub DebugMsg {
+    my ( $class, $lvl, $fmt, @args ) = @_;
+
+    chomp $fmt;
+    return unless $DebugLevel >= $lvl;
+    printf STDERR ">>> $fmt\n", @args;
+}
+
+
 ### METHOD: new( $socket )
 ### Create a new Danga::Socket object for the given I<socket> which will react
 ### to events on it during the C<wait_loop>.
@@ -233,6 +267,12 @@ sub new {
     $DescriptorMap{$fd} = $self;
     return $self;
 }
+
+
+
+#####################################################################
+### I N S T A N C E   M E T H O D S
+#####################################################################
 
 ### METHOD: tcp_cork( $boolean )
 ### Turn TCP_CORK on or off depending on the value of I<boolean>.
@@ -532,7 +572,9 @@ sub debugmsg {
 }
 
 
-
+### METHOD: peer_addr_string()
+### Returns the string describing the peer for the socket which underlies this
+### object.
 sub peer_addr_string {
     my Danga::Socket $self = shift;
     my $pn = getpeername($self->{sock}) or return undef;
