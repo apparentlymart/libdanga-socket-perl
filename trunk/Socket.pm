@@ -376,7 +376,10 @@ sub PollEventLoop {
         return 0 unless @poll;
 
         my $count = IO::Poll::_poll(-1, @poll);
-        next unless $count;
+        unless ($count) {
+            return unless PostEventLoop();
+            next;
+        }
 
         # Fetch handles with read events
         while (@poll) {
