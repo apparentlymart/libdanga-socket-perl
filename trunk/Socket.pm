@@ -69,9 +69,11 @@ our (
      %OtherFds,                  # A hash of "other" (non-Danga::Socket) file
                                  # descriptors for the event loop to track.
      $PostLoopCallback,          # subref to call at the end of each loop, if defined
+     $LoopTimeout,               # timeout of event loop in milliseconds
      );
 
 %OtherFds = ();
+$LoopTimeout = -1; # no timeout by default
 
 #####################################################################
 ### C L A S S   M E T H O D S
@@ -105,6 +107,19 @@ sub OtherFds {
     return wantarray ? %OtherFds : \%OtherFds;
 }
 
+### (CLASS) METHOD: AddOtherFds( [%fdmap] )
+### Add fds to the OtherFds hash for processing.
+sub AddOtherFds {
+    my $class = shift;
+    %OtherFds = ( %OtherFds, @_ ); # FIXME investigate what happens on dupe fds
+    return wantarray ? %OtherFds : \%OtherFds;
+}
+
+### (CLASS) METHOD: SetLoopTimeout( $timeout )
+### Set the loop timeout for the event loop to some value in milliseconds.
+sub SetLoopTimeout {
+    return $LoopTimeout = $_[1] + 0;
+}
 
 ### (CLASS) METHOD: DescriptorMap()
 ### Get the hash of Danga::Socket objects keyed by the file descriptor they are
@@ -157,8 +172,8 @@ sub EpollEventLoop {
         my @events;
         my $i;
         my $evcount;
-        # get up to 1000 events, no timeout (-1)
-        while ($evcount = epoll_wait($Epoll, 1000, -1, \@events)) {
+        # get up to 1000 events, class default timeout value
+        while (($evcount = epoll_wait($Epoll, 1000, $LoopTimeout, \@events)) >= 0) {
           EVENT:
             for ($i=0; $i<$evcount; $i++) {
                 my $ev = $events[$i];
@@ -611,7 +626,7 @@ sub watch_read {
 }
 
 
-### METHOD: watch_read( $boolean )
+### METHOD: watch_write( $boolean )
 ### Turn 'writable' event notification on or off.
 sub watch_write {
     my Danga::Socket $self = shift;
@@ -710,7 +725,7 @@ sub epoll_ctl {
 }
 
 # epoll_wait wrapper
-# ARGS: (epfd, maxevents, timeout, arrayref)
+# ARGS: (epfd, maxevents, timeout (milliseconds), arrayref)
 #  arrayref: values modified to be [$fd, $event]
 our $epoll_wait_events;
 our $epoll_wait_size = 0;
