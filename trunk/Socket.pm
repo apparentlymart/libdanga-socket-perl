@@ -448,6 +448,26 @@ sub tcp_cork {
     }
 }
 
+### METHOD: steal_socket
+### Basically returns our socket and makes it so that we don't try to close it,
+### but we do remove it from epoll handlers.
+sub steal_socket {
+    my Danga::Socket $self = shift;
+
+    # make sure we have a socket
+    my $sock = $self->{sock};
+    return unless $sock;
+
+    # now remove this socket from our epoll handler (otherwise we get confused)
+    $self->tcp_cork(0);
+    epoll_ctl($Epoll, EPOLL_CTL_DEL, $self->{fd}, $self->{event_watch})
+        if $HaveEpoll;
+
+    # now return the socket
+    $self->{sock} = undef;
+    return $sock;
+}
+
 ### METHOD: close( [$reason] )
 ### Close the socket. The I<reason> argument will be used in debugging messages.
 sub close {
@@ -468,7 +488,7 @@ sub close {
         print STDERR "Closing \#$fd due to $pkg/$filename/$line ($reason)\n";
     }
 
-    if ($HaveEpoll) {
+    if ($HaveEpoll && $sock) {
         if (epoll_ctl($Epoll, EPOLL_CTL_DEL, $fd, $self->{event_watch}) == 0) {
             DebugLevel >= 1 && $self->debugmsg("Client %d disconnected.\n", $fd);
         } else {
@@ -481,7 +501,7 @@ sub close {
 
     # defer closing the actual socket until the event loop is done
     # processing this round of events.  (otherwise we might reuse fds)
-    push @ToClose, $sock;
+    push @ToClose, $sock if $sock;
 
     return 0;
 }
