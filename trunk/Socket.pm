@@ -102,6 +102,24 @@ terms as Perl itself.
 
 ###########################################################################
 
+# we load syscall numbers into main to avoid stealing them from any other
+# potential users.  this is not ideal, but the best we can think of for now.
+# in particular, a later module doing:
+#
+#     package Bar;
+#     require 'syscall.ph';
+#     my $foo = &SYS_open;
+#
+# will fail because syscall.ph has already been loaded into main::.
+# Perhaps all modules that use syscall.ph should agree to load that into main::.
+#
+
+package main;
+eval { require 'syscall.ph'; 1 } || eval { require 'sys/syscall.ph'; 1 };
+
+# and here begins the actual module, which refers to the above-loaded
+# definitions as &::SYS_*
+
 package Danga::Socket;
 use strict;
 
@@ -121,9 +139,6 @@ use Carp qw{croak confess};
 use constant TCP_CORK => 3; # FIXME: not hard-coded (Linux-specific too)
 
 use constant DebugLevel => 0;
-
-# for epoll definitions:
-our $HAVE_SYSCALL_PH = eval { require 'syscall.ph'; 1 } || eval { require 'sys/syscall.ph'; 1 };
 
 # Explicitly define the poll constants, as either one set or the other won't be
 # loaded. They're also badly implemented in IO::Epoll:
@@ -812,7 +827,7 @@ sub SetPostLoopCallback {
 ### U T I L I T Y   F U N C T I O N S
 #####################################################################
 
-our $SYS_epoll_create = eval { &SYS_epoll_create } || 254; # linux-ix86 default
+our $SYS_epoll_create = eval { &::SYS_epoll_create } || 254; # linux-ix86 default
 
 # epoll_create wrapper
 # ARGS: (size)
@@ -824,7 +839,7 @@ sub epoll_create {
 
 # epoll_ctl wrapper
 # ARGS: (epfd, op, fd, events)
-our $SYS_epoll_ctl = eval { &SYS_epoll_ctl } || 255; # linux-ix86 default
+our $SYS_epoll_ctl = eval { &::SYS_epoll_ctl } || 255; # linux-ix86 default
 sub epoll_ctl {
     syscall($SYS_epoll_ctl, $_[0]+0, $_[1]+0, $_[2]+0, pack("LLL", $_[3], $_[2]));
 }
@@ -834,7 +849,7 @@ sub epoll_ctl {
 #  arrayref: values modified to be [$fd, $event]
 our $epoll_wait_events;
 our $epoll_wait_size = 0;
-our $SYS_epoll_wait = eval { &SYS_epoll_wait } || 256; # linux-ix86 default
+our $SYS_epoll_wait = eval { &::SYS_epoll_wait } || 256; # linux-ix86 default
 sub epoll_wait {
     # resize our static buffer if requested size is bigger than we've ever done
     if ($_[1] > $epoll_wait_size) {
