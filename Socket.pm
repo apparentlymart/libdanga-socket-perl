@@ -447,8 +447,11 @@ sub new {
 ### METHOD: tcp_cork( $boolean )
 ### Turn TCP_CORK on or off depending on the value of I<boolean>.
 sub tcp_cork {
-    my Danga::Socket $self = shift;
-    my $val = shift;
+    my Danga::Socket $self = $_[0];
+    my $val = $_[1];
+
+    # make sure we have a socket
+    return unless $self->{sock};
 
     # FIXME: Linux-specific.
     my $rv = setsockopt($self->{sock}, IPPROTO_TCP, TCP_CORK,
@@ -460,8 +463,7 @@ sub tcp_cork {
             # internal state is probably corrupted; warn and then close if
             # we're not closed already
             warn "setsockopt: $!";
-            $self->close('tcp_cork_failed')
-                unless $self->{closed};
+            $self->close('tcp_cork_failed');
         } elsif ($! == ENOPROTOOPT) {
             # TCP implementation doesn't support corking, so just ignore it
         } else {
@@ -473,34 +475,53 @@ sub tcp_cork {
 
 ### METHOD: steal_socket
 ### Basically returns our socket and makes it so that we don't try to close it,
-### but we do remove it from epoll handlers.
+### but we do remove it from epoll handlers.  THIS CLOSES $self.  It is the same
+### thing as calling close, except it gives you the socket to use.
 sub steal_socket {
-    my Danga::Socket $self = shift;
+    my Danga::Socket $self = $_[0];
 
-    # make sure we have a socket
+    # cleanup does most of the work of closing this socket
+    $self->_cleanup();
+
+    # now undef our internal sock and fd structures so we don't use them
     my $sock = $self->{sock};
-    return unless $sock;
-
-    # now remove this socket from our epoll handler (otherwise we get confused)
-    $self->tcp_cork(0);
-    if ($HaveEpoll && (epoll_ctl($Epoll, EPOLL_CTL_DEL, $self->{fd}, $self->{event_watch}) == -1)) {
-        print STDERR "epoll_ctl(): failure deleting fd=$self->{fd} during steal; $! (", $!+0, ")\n";
-        return undef;
-    }
+    $self->{sock} = undef;
 
     # now return the socket
-    $self->{sock} = undef;
     return $sock;
 }
 
 ### METHOD: close( [$reason] )
 ### Close the socket. The I<reason> argument will be used in debugging messages.
 sub close {
-    my Danga::Socket $self = shift;
-    my $reason = shift || "";
+    my Danga::Socket $self = $_[0];
 
-    my $fd = $self->{fd};
-    my $sock = $self->{sock};
+    # print out debugging info for this close
+    if (DebugLevel) {
+        my ($pkg, $filename, $line) = caller;
+        my $reason = $_[1] || "";
+        print STDERR "Closing \#$self->{fd} due to $pkg/$filename/$line ($reason)\n";
+    }
+
+    # this does most of the work of closing us
+    $self->_cleanup();
+
+    # defer closing the actual socket until the event loop is done
+    # processing this round of events.  (otherwise we might reuse fds)
+    if ($self->{sock}) {
+        push @ToClose, $self->{sock};
+        $self->{sock} = undef;
+    }
+
+    return 0;
+}
+
+### METHOD: _cleanup()
+### Called by our closers so we can clean internal data structures.
+sub _cleanup {
+    my Danga::Socket $self = $_[0];
+
+    # we're effectively closed; we have no fd and sock when we leave here
     $self->{closed} = 1;
 
     # we need to flush our write buffer, as there may
@@ -508,30 +529,27 @@ sub close {
     # preventing the object from being destroyed
     $self->{write_buf} = [];
 
-    if (DebugLevel) {
-        my ($pkg, $filename, $line) = caller;
-        print STDERR "Closing \#$fd due to $pkg/$filename/$line ($reason)\n";
-    }
+    # uncork so any final data gets sent.  only matters if the person closing
+    # us forgot to do it, but we do it to be safe.
+    $self->tcp_cork(0);
 
-    if ($HaveEpoll && $sock) {
-        if (epoll_ctl($Epoll, EPOLL_CTL_DEL, $fd, $self->{event_watch}) == 0) {
-            DebugLevel >= 1 && $self->debugmsg("Client %d disconnected.\n", $fd);
-        } else {
-            print STDERR "epoll_ctl(): failure deleting fd=$fd during close reason=$reason; $! (", $!+0, ")\n";
+    # if we're using epoll, we have to remove this from our epoll fd so we stop getting
+    # notifications about it
+    if ($HaveEpoll && $self->{fd}) {
+        if (epoll_ctl($Epoll, EPOLL_CTL_DEL, $self->{fd}, $self->{event_watch}) != 0) {
+            # dump_error prints a backtrace so we can try to figure out why this happened
+            $self->dump_error("epoll_ctl(): failure deleting fd=$self->{fd} during _cleanup(); $! (" . ($!+0) . ")");
         }
     }
 
-    delete $DescriptorMap{$fd};
-    delete $PushBackSet{$fd};
+    # now delete from mappings.  this fd no longer belongs to us, so we don't want
+    # to get alerts for it if it becomes writable/readable/etc.
+    delete $DescriptorMap{$self->{fd}};
+    delete $PushBackSet{$self->{fd}};
 
-    # defer closing the actual socket until the event loop is done
-    # processing this round of events.  (otherwise we might reuse fds)
-    push @ToClose, $sock if $sock;
-
-    return 0;
+    # and finally get rid of our fd so we can't use it anywhere else
+    $self->{fd} = undef;
 }
-
-
 
 ### METHOD: sock()
 ### Returns the underlying IO::Handle for the object.
@@ -737,7 +755,7 @@ sub event_write {
 ### Turn 'readable' event notification on or off.
 sub watch_read {
     my Danga::Socket $self = shift;
-    return if $self->{closed};
+    return if $self->{closed} || !$self->{sock};
 
     my $val = shift;
     my $event = $self->{event_watch};
@@ -759,7 +777,7 @@ sub watch_read {
 ### Turn 'writable' event notification on or off.
 sub watch_write {
     my Danga::Socket $self = shift;
-    return if $self->{closed};
+    return if $self->{closed} || !$self->{sock};
 
     my $val = shift;
     my $event = $self->{event_watch};
