@@ -127,9 +127,16 @@ use POSIX ();
 use vars qw{$VERSION};
 $VERSION = do { my @r = (q$Revision$ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r };
 
-use fields qw(sock fd write_buf write_buf_offset write_buf_size
-              read_push_back
-              closed event_watch debug_level);
+use fields ('sock',              # underlying socket
+            'fd',                # numeric file descriptor
+            'write_buf',         # arrayref of scalars, scalarrefs, or coderefs to write
+            'write_buf_offset',  # offset into first array of write_buf to start writing at
+            'write_buf_size',    # total length of data in all write_buf items
+            'read_push_back',    # arrayref of "pushed-back" read data the application didn't want
+            'closed',            # bool: socket is closed
+            'corked',            # bool: socket is corked
+            'event_watch',       # bitmask of events the client is interested in (POLLIN,OUT,etc.)
+            );
 
 use Errno qw(EINPROGRESS EWOULDBLOCK EISCONN ENOTSOCK
              EPIPE EAGAIN EBADF ECONNRESET ENOPROTOOPT);
@@ -422,6 +429,7 @@ sub new {
     $self->{write_buf_offset} = 0;
     $self->{write_buf_size} = 0;
     $self->{closed} = 0;
+    $self->{corked} = 0;
     $self->{read_push_back} = [];
 
     $self->{event_watch} = POLLERR|POLLHUP|POLLNVAL;
@@ -452,13 +460,16 @@ sub tcp_cork {
 
     # make sure we have a socket
     return unless $self->{sock};
+    return if $val == $self->{corked};
 
     # FIXME: Linux-specific.
     my $rv = setsockopt($self->{sock}, IPPROTO_TCP, TCP_CORK,
            pack("l", $val ? 1 : 0));
 
     # if we failed, close (if we're not already) and warn about the error
-    unless ($rv) {
+    if ($rv) {
+        $self->{corked} = $val;
+    } else {
         if ($! == EBADF || $! == ENOTSOCK) {
             # internal state is probably corrupted; warn and then close if
             # we're not closed already
