@@ -122,6 +122,7 @@ eval { require 'syscall.ph'; 1 } || eval { require 'sys/syscall.ph'; 1 };
 
 package Danga::Socket;
 use strict;
+use BSD::Resource;
 use POSIX ();
 
 use vars qw{$VERSION};
@@ -178,10 +179,13 @@ our (
                                  # descriptors for the event loop to track.
      $PostLoopCallback,          # subref to call at the end of each loop, if defined
      $LoopTimeout,               # timeout of event loop in milliseconds
+     $DoProfile,                 # if on, enable profiling
+     %Profiling,                 # what => [ utime, stime, calls ]
      );
 
 %OtherFds = ();
 $LoopTimeout = -1; # no timeout by default
+$DoProfile = 0;
 
 #####################################################################
 ### C L A S S   M E T H O D S
@@ -199,6 +203,24 @@ sub WatchedSockets {
 }
 *watched_sockets = *WatchedSockets;
 
+### (CLASS) METHOD: EnableProfiling()
+### Turns profiling on, clearing current profiling data.
+sub EnableProfiling {
+    %Profiling = ();
+    $DoProfile = 1;
+}
+
+### (CLASS) METHOD: DisableProfiling()
+### Turns off profiling, but retains data up to this point
+sub DisableProfiling {
+    $DoProfile = 0;
+}
+
+### (CLASS) METHOD: ProfilingData()
+### Returns reference to a hash of data in format above (see %Profiling)
+sub ProfilingData {
+    return \%Profiling;
+}
 
 ### (CLASS) METHOD: ToClose()
 ### Return the list of sockets that are awaiting close() at the end of the
@@ -313,6 +335,47 @@ sub EpollEventLoop {
                 DebugLevel >= 1 && $class->DebugMsg("Event: fd=%d (%s), state=%d \@ %s\n",
                                                     $ev->[0], ref($pob), $ev->[1], time);
 
+                if ($DoProfile) {
+                    my $profile_action = sub {
+                        my ($pwhat, $pcall) = @_;
+
+                        # get pre information
+                        my ($putime, $pstime) = getrusage();
+
+                        # make the call
+                        $pcall->();
+
+                        # get post information
+                        my ($autime, $astime) = getrusage();
+
+                        # calculate differences
+                        my $utime = $autime - $putime;
+                        my $stime = $astime - $pstime;
+
+                        # now append this profiling data
+                        my $desc = ref($pob) . '-' . $pwhat;
+                        $Profiling{$desc} ||= [ 0.0, 0.0, 0 ];
+                        $Profiling{$desc}->[0] += $utime;
+                        $Profiling{$desc}->[1] += $stime;
+                        $Profiling{$desc}->[2]++;
+                    };
+
+                    # call profiling action on things that need to be done
+                    $profile_action->('read', sub { $pob->event_read; })
+                        if $state & EPOLLIN && ! $pob->{closed};
+                    $profile_action->('write', sub { $pob->event_write; })
+                        if $state & EPOLLOUT && ! $pob->{closed};
+                    if ($state & (EPOLLERR|EPOLLHUP)) {
+                        $profile_action->('err', sub { $pob->event_err; })
+                            if $state & EPOLLERR && ! $pob->{closed};
+                        $profile_action->('hup', sub { $pob->event_hup; })
+                            if $state & EPOLLHUP && ! $pob->{closed};
+                    }
+
+                    next;
+                }
+
+                # standard non-profiling codepat
                 $pob->event_read   if $state & EPOLLIN && ! $pob->{closed};
                 $pob->event_write  if $state & EPOLLOUT && ! $pob->{closed};
                 if ($state & (EPOLLERR|EPOLLHUP)) {
