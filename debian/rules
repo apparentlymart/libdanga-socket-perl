@@ -8,8 +8,8 @@
 # This is the debhelper compatibility version to use.
 # export DH_COMPAT=4
 
-PACKAGE=`pwd | sed -e "s/.*\/\\(.*\\)-.*/\\1/"`
-
+#PACKAGE=`pwd | sed -e "s/.*\/\\(.*\\)-.*/\\1/"`
+PACKAGE=`cat debian/control | perl -ne 'print if s/Package: (.*)/$$1/'`
 
 build:
 	dh_testdir
