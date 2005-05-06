@@ -491,8 +491,10 @@ sub PollEventLoop {
 
             $pob = $DescriptorMap{$fd};
 
-            if ( !$pob && (my $code = $OtherFds{$fd}) ) {
-                $code->($state);
+            if (!$pob) {
+                if (my $code = $OtherFds{$fd}) {
+                    $code->($state);
+                }
                 next;
             }
 
