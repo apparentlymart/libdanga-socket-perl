@@ -1,3 +1,10 @@
+1.41:
+   -- make the Poll mode behave like Epoll/Kqueue in that
+      fds returned w/ no corresponding Danga::Socket object
+      or OtherFds coderef just get ignored.  make it robust
+      against apps with races, perhaps?  patch from Justin Azoff
+      <JAzoff@uamail.albany.edu>
+
 1.40:
 
    -- Kqueue support from Matt Sergeant
