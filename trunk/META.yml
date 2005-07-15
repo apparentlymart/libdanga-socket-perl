@@ -1,11 +1,10 @@
 # http://module-build.sourceforge.net/META-spec.html
 #XXXXXXX This is a prototype!!!  It will change in the future!!! XXXXX#
 name:         Danga-Socket
-version:      1.38
+version:      1.40
 version_from: Socket.pm
 installdirs:  site
 requires:
-    BSD::Resource:                 0
     fields:                        0
     IO::Poll:                      0
     POSIX:                         0

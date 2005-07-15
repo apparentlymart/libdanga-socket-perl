@@ -132,7 +132,7 @@ use POSIX ();
 my $opt_bsd_resource = eval "use BSD::Resource; 1;";
 
 use vars qw{$VERSION};
-$VERSION = do { my @r = (q$Revision$ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r };
+$VERSION = "1.42";
 
 use fields ('sock',              # underlying socket
             'fd',                # numeric file descriptor
@@ -241,7 +241,6 @@ sub ProfilingData {
 ### current event loop.
 sub ToClose { return @ToClose; }
 
-
 ### (CLASS) METHOD: OtherFds( [%fdmap] )
 ### Get/set the hash of file descriptors that need processing in parallel with
 ### the registered Danga::Socket objects.
@@ -277,7 +276,7 @@ sub DescriptorMap {
 sub init_poller
 {
     return if defined $HaveEpoll || $HaveKQueue;
-    
+
     if ($HAVE_KQUEUE) {
         $KQueue = IO::KQueue->new();
         $HaveKQueue = $KQueue >= 0;
@@ -285,7 +284,7 @@ sub init_poller
             *EventLoop = *KQueueEventLoop;
         }
     }
-    else {
+    elsif ($^O eq "linux") {
         $Epoll = eval { epoll_create(1024); };
         $HaveEpoll = $Epoll >= 0;
         if ($HaveEpoll) {
@@ -1065,7 +1064,29 @@ sub SetPostLoopCallback {
 ### U T I L I T Y   F U N C T I O N S
 #####################################################################
 
-our $SYS_epoll_create = eval { &::SYS_epoll_create } || 254; # linux-ix86 default
+our $SYS_epoll_create = eval { &::SYS_epoll_create } || 254; # linux-x86
+our $SYS_epoll_ctl    = eval { &::SYS_epoll_ctl }    || 255; # linux-x86
+our $SYS_epoll_wait   = eval { &::SYS_epoll_wait }   || 256; # linux-x86
+if ($^O eq "linux") {
+    my ($sysname, $nodename, $release, $version, $machine) = POSIX::uname();
+    if ($machine eq "x86_64") {
+        $SYS_epoll_create = 213;
+        $SYS_epoll_ctl    = 233;
+        $SYS_epoll_wait   = 232;
+    } elsif ($machine eq "ppc64") {
+        $SYS_epoll_create = 236;
+        $SYS_epoll_ctl    = 237;
+        $SYS_epoll_wait   = 238;
+    } elsif ($machine eq "ppc") {
+        $SYS_epoll_create = 236;
+        $SYS_epoll_ctl    = 237;
+        $SYS_epoll_wait   = 238;
+    } elsif ($machine eq "ia64") {
+        $SYS_epoll_create = 1243;
+        $SYS_epoll_ctl    = 1244;
+        $SYS_epoll_wait   = 1245;
+    }
+}
 
 # epoll_create wrapper
 # ARGS: (size)
@@ -1076,10 +1097,9 @@ sub epoll_create {
 }
 
 # epoll_ctl wrapper
-# ARGS: (epfd, op, fd, events)
-our $SYS_epoll_ctl = eval { &::SYS_epoll_ctl } || 255; # linux-ix86 default
+# ARGS: (epfd, op, fd, events_mask)
 sub epoll_ctl {
-    syscall($SYS_epoll_ctl, $_[0]+0, $_[1]+0, $_[2]+0, pack("LLL", $_[3], $_[2]));
+    syscall($SYS_epoll_ctl, $_[0]+0, $_[1]+0, $_[2]+0, pack("LLL", $_[3], $_[2], 0));
 }
 
 # epoll_wait wrapper
@@ -1087,7 +1107,6 @@ sub epoll_ctl {
 #  arrayref: values modified to be [$fd, $event]
 our $epoll_wait_events;
 our $epoll_wait_size = 0;
-our $SYS_epoll_wait = eval { &::SYS_epoll_wait } || 256; # linux-ix86 default
 sub epoll_wait {
     # resize our static buffer if requested size is bigger than we've ever done
     if ($_[1] > $epoll_wait_size) {
@@ -1100,8 +1119,6 @@ sub epoll_wait {
     }
     return $ct;
 }
-
-
 
 1;
 
