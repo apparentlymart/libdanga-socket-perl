@@ -1086,6 +1086,10 @@ our $SYS_epoll_ctl    = eval { &::SYS_epoll_ctl }    || 255; # linux-x86
 our $SYS_epoll_wait   = eval { &::SYS_epoll_wait }   || 256; # linux-x86
 if ($^O eq "linux") {
     my ($sysname, $nodename, $release, $version, $machine) = POSIX::uname();
+
+    # assume we'll use 32 bit epoll structs for now
+    my $epoll_structs = 32;
+
     if ($machine eq "x86_64") {
         $SYS_epoll_create = 213;
         $SYS_epoll_ctl    = 233;
@@ -1102,7 +1106,15 @@ if ($^O eq "linux") {
         $SYS_epoll_create = 1243;
         $SYS_epoll_ctl    = 1244;
         $SYS_epoll_wait   = 1245;
+        $epoll_structs    = 64;
+    }
+
+    if ($epoll_structs == 64) {
         *epoll_wait = \&epoll_wait_64;
+        *epoll_ctl = \&epoll_ctl_64;
+    } else {
+        *epoll_wait = \&epoll_wait_32;
+        *epoll_ctl = \&epoll_ctl_32;
     }
 }
 
@@ -1116,8 +1128,11 @@ sub epoll_create {
 
 # epoll_ctl wrapper
 # ARGS: (epfd, op, fd, events_mask)
-sub epoll_ctl {
+sub epoll_ctl_32 {
     syscall($SYS_epoll_ctl, $_[0]+0, $_[1]+0, $_[2]+0, pack("LLL", $_[3], $_[2], 0));
+}
+sub epoll_ctl_64 {
+    syscall($SYS_epoll_ctl, $_[0]+0, $_[1]+0, $_[2]+0, pack("LLLL", $_[3], 0, $_[2], 0));
 }
 
 # epoll_wait wrapper
@@ -1154,7 +1169,6 @@ sub epoll_wait_64 {
     }
     return $ct;
 }
-*epoll_wait = \&epoll_wait_32;
 
 1;
 
