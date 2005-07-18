@@ -1,6 +1,7 @@
 1.42:
    -- use the right epoll system call numbers on non-x86
       machines
+   -- start of a good test suite
 
 1.41:
    -- make the Poll mode behave like Epoll/Kqueue in that

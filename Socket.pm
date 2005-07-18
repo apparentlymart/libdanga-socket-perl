@@ -51,7 +51,7 @@ Danga::Socket - Event loop and event-driven async socket base class
   $my_sock->push_back_read($buf); # scalar or scalar ref
 
   Danga::Socket->AddOtherFds(..);
-  Danga::Socket->SetLoopTimeout(..);
+  Danga::Socket->SetLoopTimeout($millisecs);
   Danga::Socket->DescriptorMap();
   Danga::Socket->WatchedSockets();  # count of DescriptorMap keys
   Danga::Socket->SetPostLoopCallback($code);
@@ -193,13 +193,23 @@ our (
      %Profiling,                 # what => [ utime, stime, calls ]
      );
 
-%OtherFds = ();
-$LoopTimeout = -1; # no timeout by default
-$DoProfile = 0;
+Reset();
 
 #####################################################################
 ### C L A S S   M E T H O D S
 #####################################################################
+
+# (CLASS) method: reset all state
+sub Reset {
+    %DescriptorMap = ();
+    %PushBackSet = ();
+    @ToClose = ();
+    %OtherFds = ();
+    $PostLoopCallback = undef;
+    $LoopTimeout = -1;  # no timeout by default
+    $DoProfile = 0;
+    %Profiling = ();
+}
 
 ### (CLASS) METHOD: HaveEpoll()
 ### Returns a true value if this class will use IO::Epoll for async IO.
@@ -273,9 +283,11 @@ sub DescriptorMap {
 *descriptor_map = *DescriptorMap;
 *get_sock_ref = *DescriptorMap;
 
+our $DoneInit = 0;
 sub init_poller
 {
-    return if defined $HaveEpoll || $HaveKQueue;
+    return if $DoneInit;
+    $DoneInit = 1;
 
     if ($HAVE_KQUEUE) {
         $KQueue = IO::KQueue->new();
@@ -286,12 +298,12 @@ sub init_poller
     }
     elsif ($^O eq "linux") {
         $Epoll = eval { epoll_create(1024); };
-        $HaveEpoll = $Epoll >= 0;
+        $HaveEpoll = defined $Epoll && $Epoll >= 0;
         if ($HaveEpoll) {
             *EventLoop = *EpollEventLoop;
         }
     }
-    
+
     if (!$HaveEpoll && !$HaveKQueue) {
         require IO::Poll;
         *EventLoop = *PollEventLoop;
@@ -475,7 +487,15 @@ sub PollEventLoop {
         while ( my ($fd, $sock) = each %DescriptorMap ) {
             push @poll, $fd, $sock->{event_watch};
         }
-        return 0 unless @poll;
+
+        # if nothing to poll, either end immediately (if no timeout)
+        # or just keep calling the callback
+        unless (@poll) {
+            my $timeout = $LoopTimeout > 0 ? $LoopTimeout : 1000;
+            select undef, undef, undef, ($timeout / 1000);
+            return unless PostEventLoop();
+            next;
+        }
 
         my $count = IO::Poll::_poll($LoopTimeout, @poll);
         unless ($count) {
@@ -513,14 +533,13 @@ sub PollEventLoop {
 ### okay.
 sub KQueueEventLoop {
     my $class = shift;
-    
+
     foreach my $fd (keys %OtherFds) {
         $KQueue->EV_SET($fd, IO::KQueue::EVFILT_READ(), IO::KQueue::EV_ADD());
     }
-    
+
     while (1) {
-        my @ret = $KQueue->kevent(1000);
-        
+        my @ret = $KQueue->kevent($LoopTimeout);
         if (!@ret) {
             foreach my $fd ( keys %DescriptorMap ) {
                 my Danga::Socket $sock = $DescriptorMap{$fd};
@@ -529,22 +548,20 @@ sub KQueueEventLoop {
                 }
             }
         }
-        
+
         foreach my $kev (@ret) {
             my ($fd, $filter, $flags, $fflags) = @$kev;
-            
             my Danga::Socket $pob = $DescriptorMap{$fd};
-            
             if (!$pob) {
                 if (my $code = $OtherFds{$fd}) {
                     $code->($filter);
                 }
                 next;
             }
-            
+
             DebugLevel >= 1 && $class->DebugMsg("Event: fd=%d (%s), flags=%d \@ %s\n",
                                                         $fd, ref($pob), $flags, time);
-            
+
             $pob->event_read  if $filter == IO::KQueue::EVFILT_READ()  && !$pob->{closed};
             $pob->event_write if $filter == IO::KQueue::EVFILT_WRITE() && !$pob->{closed};
             if ($flags ==  IO::KQueue::EV_EOF() && !$pob->{closed}) {
@@ -557,7 +574,7 @@ sub KQueueEventLoop {
         }
         return unless PostEventLoop();
     }
-    
+
     exit(0);
 }
 
@@ -1069,6 +1086,7 @@ our $SYS_epoll_ctl    = eval { &::SYS_epoll_ctl }    || 255; # linux-x86
 our $SYS_epoll_wait   = eval { &::SYS_epoll_wait }   || 256; # linux-x86
 if ($^O eq "linux") {
     my ($sysname, $nodename, $release, $version, $machine) = POSIX::uname();
+
     if ($machine eq "x86_64") {
         $SYS_epoll_create = 213;
         $SYS_epoll_ctl    = 233;
