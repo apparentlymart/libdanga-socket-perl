@@ -1086,7 +1086,6 @@ our $SYS_epoll_ctl    = eval { &::SYS_epoll_ctl }    || 255; # linux-x86
 our $SYS_epoll_wait   = eval { &::SYS_epoll_wait }   || 256; # linux-x86
 if ($^O eq "linux") {
     my ($sysname, $nodename, $release, $version, $machine) = POSIX::uname();
-
     if ($machine eq "x86_64") {
         $SYS_epoll_create = 213;
         $SYS_epoll_ctl    = 233;
@@ -1103,6 +1102,7 @@ if ($^O eq "linux") {
         $SYS_epoll_create = 1243;
         $SYS_epoll_ctl    = 1244;
         $SYS_epoll_wait   = 1245;
+        *epoll_wait = \&epoll_wait_64;
     }
 }
 
@@ -1125,11 +1125,11 @@ sub epoll_ctl {
 #  arrayref: values modified to be [$fd, $event]
 our $epoll_wait_events;
 our $epoll_wait_size = 0;
-sub epoll_wait {
+sub epoll_wait_32 {
     # resize our static buffer if requested size is bigger than we've ever done
     if ($_[1] > $epoll_wait_size) {
         $epoll_wait_size = $_[1];
-        $epoll_wait_events = pack("LLL") x $epoll_wait_size;
+        $epoll_wait_events = "\0" x 12 x $epoll_wait_size;
     }
     my $ct = syscall($SYS_epoll_wait, $_[0]+0, $epoll_wait_events, $_[1]+0, $_[2]+0);
     for ($_ = 0; $_ < $ct; $_++) {
@@ -1137,6 +1137,24 @@ sub epoll_wait {
     }
     return $ct;
 }
+
+sub epoll_wait_64 {
+    # resize our static buffer if requested size is bigger than we've ever done
+    if ($_[1] > $epoll_wait_size) {
+        $epoll_wait_size = $_[1];
+        $epoll_wait_events = "\0" x 16 x $epoll_wait_size;
+    }
+    my $ct = syscall($SYS_epoll_wait, $_[0]+0, $epoll_wait_events, $_[1]+0, $_[2]+0);
+    for ($_ = 0; $_ < $ct; $_++) {
+        # 16 byte epoll_event structs, with format:
+        #    4 byte mask [idx 1]
+        #    4 byte padding (we put it into idx 2, useless)
+        #    8 byte data (first 4 bytes are fd, into idx 0)
+        @{$_[3]->[$_]}[1,2,0] = unpack("LLL", substr($epoll_wait_events, 16*$_, 12));
+    }
+    return $ct;
+}
+*epoll_wait = \&epoll_wait_32;
 
 1;
 
