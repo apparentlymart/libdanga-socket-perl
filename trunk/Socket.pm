@@ -1087,8 +1087,9 @@ our $SYS_epoll_wait   = eval { &::SYS_epoll_wait }   || 256; # linux-x86
 if ($^O eq "linux") {
     my ($sysname, $nodename, $release, $version, $machine) = POSIX::uname();
 
-    # assume we'll use 32 bit epoll structs for now
-    my $epoll_structs = 32;
+    # whether the machine requires 64-bit numbers to be on 8-byte
+    # boundaries.
+    my $u64_mod_8 = 0;
 
     if ($machine eq "x86_64") {
         $SYS_epoll_create = 213;
@@ -1098,23 +1099,25 @@ if ($^O eq "linux") {
         $SYS_epoll_create = 236;
         $SYS_epoll_ctl    = 237;
         $SYS_epoll_wait   = 238;
+        $u64_mod_8        = 1;
     } elsif ($machine eq "ppc") {
         $SYS_epoll_create = 236;
         $SYS_epoll_ctl    = 237;
         $SYS_epoll_wait   = 238;
+        $u64_mod_8        = 1;
     } elsif ($machine eq "ia64") {
         $SYS_epoll_create = 1243;
         $SYS_epoll_ctl    = 1244;
         $SYS_epoll_wait   = 1245;
-        $epoll_structs    = 64;
+        $u64_mod_8        = 1;
     }
 
-    if ($epoll_structs == 64) {
-        *epoll_wait = \&epoll_wait_64;
-        *epoll_ctl = \&epoll_ctl_64;
+    if ($u64_mod_8) {
+        *epoll_wait = \&epoll_wait_mod8;
+        *epoll_ctl = \&epoll_ctl_mod8;
     } else {
-        *epoll_wait = \&epoll_wait_32;
-        *epoll_ctl = \&epoll_ctl_32;
+        *epoll_wait = \&epoll_wait_mod4;
+        *epoll_ctl = \&epoll_ctl_mod4;
     }
 }
 
@@ -1128,10 +1131,10 @@ sub epoll_create {
 
 # epoll_ctl wrapper
 # ARGS: (epfd, op, fd, events_mask)
-sub epoll_ctl_32 {
+sub epoll_ctl_mod4 {
     syscall($SYS_epoll_ctl, $_[0]+0, $_[1]+0, $_[2]+0, pack("LLL", $_[3], $_[2], 0));
 }
-sub epoll_ctl_64 {
+sub epoll_ctl_mod8 {
     syscall($SYS_epoll_ctl, $_[0]+0, $_[1]+0, $_[2]+0, pack("LLLL", $_[3], 0, $_[2], 0));
 }
 
@@ -1140,7 +1143,7 @@ sub epoll_ctl_64 {
 #  arrayref: values modified to be [$fd, $event]
 our $epoll_wait_events;
 our $epoll_wait_size = 0;
-sub epoll_wait_32 {
+sub epoll_wait_mod4 {
     # resize our static buffer if requested size is bigger than we've ever done
     if ($_[1] > $epoll_wait_size) {
         $epoll_wait_size = $_[1];
@@ -1153,7 +1156,7 @@ sub epoll_wait_32 {
     return $ct;
 }
 
-sub epoll_wait_64 {
+sub epoll_wait_mod8 {
     # resize our static buffer if requested size is bigger than we've ever done
     if ($_[1] > $epoll_wait_size) {
         $epoll_wait_size = $_[1];
