@@ -59,13 +59,17 @@ Danga::Socket - Event loop and event-driven async socket base class
 
 =head1 DESCRIPTION
 
-This is an abstract base class which provides the basic framework for
-event-driven asynchronous IO, designed to be fast.
+This is an abstract base class for objects backed by a socket which
+provides the basic framework for event-driven asynchronous IO,
+designed to be fast.  Danga::Socket is both a base class for objects,
+and an event loop.
 
 Callers subclass Danga::Socket.  Danga::Socket's constructor registers
-itself with the Danga::Socket event loop (which uses the efficient
-epoll on Linux 2.6) and invokes callbacks on the object for readability,
-writability, errors, and other conditions.
+itself with the Danga::Socket event loop, and invokes callbacks on the
+object for readability, writability, errors, and other conditions.
+
+Because Danga::Socket uses the "fields" module, your subclasses must
+too.
 
 =head1 MORE INFO
 
@@ -84,19 +88,11 @@ Matt Sergeant <matt@sergeant.org> - kqueue support
 
 =head1 BUGS
 
-Not documented.
+Not documented enough.
 
-Doesn't use kqueue on FreeBSD because it looks hard to do without XS
-which this code happily avoids.  (epoll is implemented with only
-Perl's 'syscall')
-
-Syscall numbers 254, 255, and 256 are used when SYS_epoll_* constants
-aren't available, but those numbers are hard-coded values from the i386
-Linux architecture.
-
-The packed data used with the epoll syscalls is likely only to work on
-32-bit Linux x86.  None of this code has been tested much on other
-platforms or architectures.
+epoll is only used on Linux when the arch is one of x86, x86_64, ia64,
+ppc, and ppc64.  Mail me if you want to use this module with epoll
+mode on something else.  (ideally with a patch)
 
 =head1 LICENSE
 
@@ -107,24 +103,6 @@ terms as Perl itself.
 
 ###########################################################################
 
-# we load syscall numbers into main to avoid stealing them from any other
-# potential users.  this is not ideal, but the best we can think of for now.
-# in particular, a later module doing:
-#
-#     package Bar;
-#     require 'syscall.ph';
-#     my $foo = &SYS_open;
-#
-# will fail because syscall.ph has already been loaded into main::.
-# Perhaps all modules that use syscall.ph should agree to load that into main::.
-#
-
-package main;
-eval { require 'syscall.ph'; 1 } || eval { require 'sys/syscall.ph'; 1 };
-
-# and here begins the actual module, which refers to the above-loaded
-# definitions as &::SYS_*
-
 package Danga::Socket;
 use strict;
 use POSIX ();
@@ -132,7 +110,7 @@ use POSIX ();
 my $opt_bsd_resource = eval "use BSD::Resource; 1;";
 
 use vars qw{$VERSION};
-$VERSION = "1.42";
+$VERSION = "1.43";
 
 use fields ('sock',              # underlying socket
             'fd',                # numeric file descriptor
@@ -176,7 +154,6 @@ use constant POLLNVAL      => 32;
 
 our $HAVE_KQUEUE = eval { require IO::KQueue; 1 };
 
-# keep track of active clients
 our (
      $HaveEpoll,                 # Flag -- is epoll available?  initially undefined.
      $HaveKQueue,
@@ -191,6 +168,8 @@ our (
      $LoopTimeout,               # timeout of event loop in milliseconds
      $DoProfile,                 # if on, enable profiling
      %Profiling,                 # what => [ utime, stime, calls ]
+     $TryEpoll,                  # whether epoll should be attempted to be used.
+     $DoneInit,                  # if we've done the one-time module init yet
      );
 
 Reset();
@@ -283,7 +262,6 @@ sub DescriptorMap {
 *descriptor_map = *DescriptorMap;
 *get_sock_ref = *DescriptorMap;
 
-our $DoneInit = 0;
 sub init_poller
 {
     return if $DoneInit;
@@ -296,7 +274,7 @@ sub init_poller
             *EventLoop = *KQueueEventLoop;
         }
     }
-    elsif ($^O eq "linux") {
+    elsif ($TryEpoll) {
         $Epoll = eval { epoll_create(1024); };
         $HaveEpoll = defined $Epoll && $Epoll >= 0;
         if ($HaveEpoll) {
@@ -1081,9 +1059,8 @@ sub SetPostLoopCallback {
 ### U T I L I T Y   F U N C T I O N S
 #####################################################################
 
-our $SYS_epoll_create = eval { &::SYS_epoll_create } || 254; # linux-x86
-our $SYS_epoll_ctl    = eval { &::SYS_epoll_ctl }    || 255; # linux-x86
-our $SYS_epoll_wait   = eval { &::SYS_epoll_wait }   || 256; # linux-x86
+our ($SYS_epoll_create, $SYS_epoll_ctl, $SYS_epoll_wait);
+
 if ($^O eq "linux") {
     my ($sysname, $nodename, $release, $version, $machine) = POSIX::uname();
 
@@ -1091,7 +1068,11 @@ if ($^O eq "linux") {
     # boundaries.
     my $u64_mod_8 = 0;
 
-    if ($machine eq "x86_64") {
+    if ($machine =~ m/^i[3456]86$/) {
+        $SYS_epoll_create = 254;
+        $SYS_epoll_ctl    = 255;
+        $SYS_epoll_wait   = 256;
+    } elsif ($machine eq "x86_64") {
         $SYS_epoll_create = 213;
         $SYS_epoll_ctl    = 233;
         $SYS_epoll_wait   = 232;
@@ -1119,6 +1100,12 @@ if ($^O eq "linux") {
         *epoll_wait = \&epoll_wait_mod4;
         *epoll_ctl = \&epoll_ctl_mod4;
     }
+
+    # if syscall numbers have been defined (and this module has been
+    # tested on) the arch above, then try to use it.  try means see if
+    # the syscall is implemented.  it may well be that this is Linux
+    # 2.4 and we don't even have it available.
+    $TryEpoll = 1 if $SYS_epoll_create;
 }
 
 # epoll_create wrapper
