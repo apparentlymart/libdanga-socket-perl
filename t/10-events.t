@@ -60,11 +60,10 @@ use base 'Danga::Socket';
 sub new {
     my $class = shift;
     my $ssock = IO::Socket::INET->new(Listen    => 5,
-                                      LocalAddr => 'localhost',
+                                      LocalAddr => '127.0.0.1',
                                       LocalPort => 60000,
                                       Proto     => 'tcp',
                                       ReuseAddr => 1,
-                                      Blocking => 0,
                                       );
     die "couldn't create socket" unless $ssock;
     IO::Handle::blocking($ssock, 0);
