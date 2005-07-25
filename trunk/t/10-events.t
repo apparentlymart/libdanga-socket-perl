@@ -8,8 +8,6 @@ use POSIX;
 
 use vars qw($done);
 
-Danga::Socket::init_poller();
-
 SKIP: {
     my ($sysname, $nodename, $release, $version, $machine) = POSIX::uname();
     skip "not on linux 2.6", 1 if $^O ne "linux" || $version =~ /^2\.[01234]/;

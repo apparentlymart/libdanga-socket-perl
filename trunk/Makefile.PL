@@ -22,6 +22,7 @@ WriteMakefile(
         fields          => 0,
         'POSIX'         => 0,
         'Test::More'    => 0,
+        'Time::HiRes'   => 0,
     },
     dist                    => {
         CI                      => "cvs commit",
