@@ -165,7 +165,10 @@ our (
      @ToClose,                   # sockets to close when event loop is done
      %OtherFds,                  # A hash of "other" (non-Danga::Socket) file
                                  # descriptors for the event loop to track.
-     $PostLoopCallback,          # subref to call at the end of each loop, if defined
+
+     $PostLoopCallback,          # subref to call at the end of each loop, if defined (global)
+     %PLCMap,                    # fd (num) -> PostLoopCallback (per-object)
+
      $LoopTimeout,               # timeout of event loop in milliseconds
      $DoProfile,                 # if on, enable profiling
      %Profiling,                 # what => [ utime, stime, calls ]
@@ -185,10 +188,12 @@ sub Reset {
     %PushBackSet = ();
     @ToClose = ();
     %OtherFds = ();
-    $PostLoopCallback = undef;
     $LoopTimeout = -1;  # no timeout by default
     $DoProfile = 0;
     %Profiling = ();
+
+    $PostLoopCallback = undef;
+    %PLCMap = ();
 }
 
 ### (CLASS) METHOD: HaveEpoll()
@@ -550,7 +555,19 @@ sub KQueueEventLoop {
 ### be passed two parameters: \%DescriptorMap, \%OtherFds.
 sub SetPostLoopCallback {
     my ($class, $ref) = @_;
-    $PostLoopCallback = (defined $ref && ref $ref eq 'CODE') ? $ref : undef;
+
+    if (ref $class) {
+        # per-object callback
+        my Danga::Socket $self = $class;
+        if (defined $ref && ref $ref eq 'CODE') {
+            $PLCMap{$self->{fd}} = $ref;
+        } else {
+            delete $PLCMap{$self->{fd}};
+        }
+    } else {
+        # global callback
+        $PostLoopCallback = (defined $ref && ref $ref eq 'CODE') ? $ref : undef;
+    }
 }
 
 # Internal function: run the post-event callback, send read events
@@ -575,11 +592,21 @@ sub PostEventLoop {
     #  being reused and confused during the event loop)
     $_->close while ($_ = shift @ToClose);
 
+    # by default we keep running, unless a postloop callback (either per-object
+    # or global) cancels it
+    my $keep_running = 1;
+
+    # per-object post-loop-callbacks
+    for my $plc (values %PLCMap) {
+        $keep_running &&= $plc->(\%DescriptorMap, \%OtherFds);
+    }
+
     # now we're at the very end, call callback if defined
     if (defined $PostLoopCallback) {
-        return $PostLoopCallback->(\%DescriptorMap, \%OtherFds);
+        $keep_running &&= $PostLoopCallback->(\%DescriptorMap, \%OtherFds);
     }
-    return 1;
+
+    return $keep_running;
 }
 
 #####################################################################
@@ -735,6 +762,7 @@ sub _cleanup {
     # to get alerts for it if it becomes writable/readable/etc.
     delete $DescriptorMap{$self->{fd}};
     delete $PushBackSet{$self->{fd}};
+    delete $PLCMap{$self->{fd}};
 
     # and finally get rid of our fd so we can't use it anywhere else
     $self->{fd} = undef;
