@@ -106,6 +106,7 @@ terms as Perl itself.
 package Danga::Socket;
 use strict;
 use POSIX ();
+use Time::HiRes ();
 
 my $opt_bsd_resource = eval "use BSD::Resource; 1;";
 
@@ -121,16 +122,16 @@ use fields ('sock',              # underlying socket
             'closed',            # bool: socket is closed
             'corked',            # bool: socket is corked
             'event_watch',       # bitmask of events the client is interested in (POLLIN,OUT,etc.)
+            'peer_ip',           # cached stringified IP address of $sock
+            'peer_port',         # cached port number of $sock
             );
 
-use Errno qw(EINPROGRESS EWOULDBLOCK EISCONN ENOTSOCK
-             EPIPE EAGAIN EBADF ECONNRESET ENOPROTOOPT);
-
+use Errno  qw(EINPROGRESS EWOULDBLOCK EISCONN ENOTSOCK
+              EPIPE EAGAIN EBADF ECONNRESET ENOPROTOOPT);
 use Socket qw(IPPROTO_TCP);
-use Carp qw{croak confess};
+use Carp   qw(croak confess);
 
 use constant TCP_CORK => 3; # FIXME: not hard-coded (Linux-specific too)
-
 use constant DebugLevel => 0;
 
 # Explicitly define the poll constants, as either one set or the other won't be
@@ -192,7 +193,10 @@ sub Reset {
 
 ### (CLASS) METHOD: HaveEpoll()
 ### Returns a true value if this class will use IO::Epoll for async IO.
-sub HaveEpoll { $HaveEpoll };
+sub HaveEpoll {
+    _InitPoller();
+    return $HaveEpoll;
+}
 
 ### (CLASS) METHOD: WatchedSockets()
 ### Returns the number of file descriptors which are registered with the global
@@ -253,6 +257,15 @@ sub SetLoopTimeout {
     return $LoopTimeout = $_[1] + 0;
 }
 
+### (CLASS) METHOD: DebugMsg( $format, @args )
+### Print the debugging message specified by the C<sprintf>-style I<format> and
+### I<args>
+sub DebugMsg {
+    my ( $class, $fmt, @args ) = @_;
+    chomp $fmt;
+    printf STDERR ">>> $fmt\n", @args;
+}
+
 ### (CLASS) METHOD: DescriptorMap()
 ### Get the hash of Danga::Socket objects keyed by the file descriptor they are
 ### wrapping.
@@ -262,7 +275,7 @@ sub DescriptorMap {
 *descriptor_map = *DescriptorMap;
 *get_sock_ref = *DescriptorMap;
 
-sub init_poller
+sub _InitPoller
 {
     return if $DoneInit;
     $DoneInit = 1;
@@ -293,7 +306,7 @@ sub init_poller
 sub EventLoop {
     my $class = shift;
 
-    init_poller();
+    _InitPoller();
 
     if ($HaveEpoll) {
         EpollEventLoop($class);
@@ -420,32 +433,6 @@ sub EpollEventLoop {
     exit 0;
 }
 
-sub PostEventLoop {
-    # fire read events for objects with pushed-back read data
-    my $loop = 1;
-    while ($loop) {
-        $loop = 0;
-        foreach my $fd (keys %PushBackSet) {
-            my Danga::Socket $pob = $PushBackSet{$fd};
-            next unless (! $pob->{closed} &&
-                         $pob->{event_watch} & POLLIN);
-            $loop = 1;
-            $pob->event_read;
-        }
-    }
-
-    # now we can close sockets that wanted to close during our event processing.
-    # (we didn't want to close them during the loop, as we didn't want fd numbers
-    #  being reused and confused during the event loop)
-    $_->close while ($_ = shift @ToClose);
-
-    # now we're at the very end, call callback if defined
-    if (defined $PostLoopCallback) {
-        return $PostLoopCallback->(\%DescriptorMap, \%OtherFds);
-    }
-    return 1;
-}
-
 ### The fallback IO::Poll-based event loop. Gets installed as EventLoop if
 ### IO::Epoll fails to load.
 sub PollEventLoop {
@@ -556,15 +543,48 @@ sub KQueueEventLoop {
     exit(0);
 }
 
-### (CLASS) METHOD: DebugMsg( $format, @args )
-### Print the debugging message specified by the C<sprintf>-style I<format> and
-### I<args>
-sub DebugMsg {
-    my ( $class, $fmt, @args ) = @_;
-    chomp $fmt;
-    printf STDERR ">>> $fmt\n", @args;
+### CLASS METHOD: SetPostLoopCallback
+### Sets post loop callback function.  Pass a subref and it will be
+### called every time the event loop finishes.  Return 1 from the sub
+### to make the loop continue, else it will exit.  The function will
+### be passed two parameters: \%DescriptorMap, \%OtherFds.
+sub SetPostLoopCallback {
+    my ($class, $ref) = @_;
+    $PostLoopCallback = (defined $ref && ref $ref eq 'CODE') ? $ref : undef;
 }
 
+# Internal function: run the post-event callback, send read events
+# for pushed-back data, and close pending connections.  returns 1
+# if event loop should continue, or 0 to shut it all down.
+sub PostEventLoop {
+    # fire read events for objects with pushed-back read data
+    my $loop = 1;
+    while ($loop) {
+        $loop = 0;
+        foreach my $fd (keys %PushBackSet) {
+            my Danga::Socket $pob = $PushBackSet{$fd};
+            next unless (! $pob->{closed} &&
+                         $pob->{event_watch} & POLLIN);
+            $loop = 1;
+            $pob->event_read;
+        }
+    }
+
+    # now we can close sockets that wanted to close during our event processing.
+    # (we didn't want to close them during the loop, as we didn't want fd numbers
+    #  being reused and confused during the event loop)
+    $_->close while ($_ = shift @ToClose);
+
+    # now we're at the very end, call callback if defined
+    if (defined $PostLoopCallback) {
+        return $PostLoopCallback->(\%DescriptorMap, \%OtherFds);
+    }
+    return 1;
+}
+
+#####################################################################
+### Danga::Socket-the-object code
+#####################################################################
 
 ### METHOD: new( $socket )
 ### Create a new Danga::Socket object for the given I<socket> which will react
@@ -587,7 +607,7 @@ sub new {
 
     $self->{event_watch} = POLLERR|POLLHUP|POLLNVAL;
 
-    init_poller();
+    _InitPoller();
 
     if ($HaveEpoll) {
         epoll_ctl($Epoll, EPOLL_CTL_ADD, $fd, $self->{event_watch})
@@ -604,7 +624,6 @@ sub new {
     $DescriptorMap{$fd} = $self;
     return $self;
 }
-
 
 
 #####################################################################
@@ -935,10 +954,10 @@ sub watch_read {
 
     my $val = shift;
     my $event = $self->{event_watch};
-    
+
     $event &= ~POLLIN if ! $val;
     $event |=  POLLIN if   $val;
-    
+
     # If it changed, set it
     if ($event != $self->{event_watch}) {
         if ($HaveKQueue) {
@@ -962,7 +981,7 @@ sub watch_write {
 
     my $val = shift;
     my $event = $self->{event_watch};
-    
+
     $event &= ~POLLOUT if ! $val;
     $event |=  POLLOUT if   $val;
 
@@ -990,7 +1009,7 @@ sub dump_error {
     while (my ($file, $line, $sub) = (caller($i++))[1..3]) {
         push @list, "\t$file:$line called $sub\n";
     }
-    
+
     print STDERR "ERROR: $_[1]\n" .
                  "\t$_[0] = " . $_[0]->as_string . "\n" .
                  join('', @list);
@@ -1015,9 +1034,13 @@ sub debugmsg {
 sub peer_ip_string {
     my Danga::Socket $self = shift;
     return undef unless $self->{sock};
+    return $self->{peer_ip} if defined $self->{peer_ip};
+
     my $pn = getpeername($self->{sock}) or return undef;
     my ($port, $iaddr) = Socket::sockaddr_in($pn);
-    return Socket::inet_ntoa($iaddr);
+    $self->{peer_port} = $port;
+
+    return $self->{peer_ip} = Socket::inet_ntoa($iaddr);
 }
 
 ### METHOD: peer_addr_string()
@@ -1025,10 +1048,8 @@ sub peer_ip_string {
 ### object in form "ip:port"
 sub peer_addr_string {
     my Danga::Socket $self = shift;
-    return undef unless $self->{sock};
-    my $pn = getpeername($self->{sock}) or return undef;
-    my ($port, $iaddr) = Socket::sockaddr_in($pn);
-    return Socket::inet_ntoa($iaddr) . ":$port";
+    my $ip = $self->peer_ip_string;
+    return $ip ? "$ip:$self->{peer_port}" : undef;
 }
 
 ### METHOD: as_string()
@@ -1043,16 +1064,6 @@ sub as_string {
         $ret .= " to " . $self->peer_addr_string;
     }
     return $ret;
-}
-
-### CLASS METHOD: SetPostLoopCallback
-### Sets post loop callback function.  Pass a subref and it will be
-### called every time the event loop finishes.  Return 1 from the sub
-### to make the loop continue, else it will exit.  The function will
-### be passed two parameters: \%DescriptorMap, \%OtherFds.
-sub SetPostLoopCallback {
-    my ($class, $ref) = @_;
-    $PostLoopCallback = (defined $ref && ref $ref eq 'CODE') ? $ref : undef;
 }
 
 #####################################################################
