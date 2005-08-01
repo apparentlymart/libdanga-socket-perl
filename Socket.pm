@@ -116,6 +116,8 @@ $VERSION = "1.43";
 use warnings;
 no  warnings qw(deprecated);
 
+use Sys::Syscall qw(:epoll);
+
 use fields ('sock',              # underlying socket
             'fd',                # numeric file descriptor
             'write_buf',         # arrayref of scalars, scalarrefs, or coderefs to write
@@ -136,19 +138,6 @@ use Carp   qw(croak confess);
 
 use constant TCP_CORK => 3; # FIXME: not hard-coded (Linux-specific too)
 use constant DebugLevel => 0;
-
-# Explicitly define the poll constants, as either one set or the other won't be
-# loaded. They're also badly implemented in IO::Epoll:
-# The IO::Epoll module is buggy in that it doesn't export constants efficiently
-# (at least as of 0.01), so doing constants ourselves saves 13% of the user CPU
-# time
-use constant EPOLLIN       => 1;
-use constant EPOLLOUT      => 4;
-use constant EPOLLERR      => 8;
-use constant EPOLLHUP      => 16;
-use constant EPOLL_CTL_ADD => 1;
-use constant EPOLL_CTL_DEL => 2;
-use constant EPOLL_CTL_MOD => 3;
 
 use constant POLLIN        => 1;
 use constant POLLOUT       => 4;
@@ -175,7 +164,6 @@ our (
      $LoopTimeout,               # timeout of event loop in milliseconds
      $DoProfile,                 # if on, enable profiling
      %Profiling,                 # what => [ utime, stime, calls ]
-     $TryEpoll,                  # whether epoll should be attempted to be used.
      $DoneInit,                  # if we've done the one-time module init yet
      );
 
@@ -295,7 +283,7 @@ sub _InitPoller
             *EventLoop = *KQueueEventLoop;
         }
     }
-    elsif ($TryEpoll) {
+    elsif (Sys::Syscall::epoll_defined()) {
         $Epoll = eval { epoll_create(1024); };
         $HaveEpoll = defined $Epoll && $Epoll >= 0;
         if ($HaveEpoll) {
@@ -1097,113 +1085,7 @@ sub as_string {
     return $ret;
 }
 
-#####################################################################
-### U T I L I T Y   F U N C T I O N S
-#####################################################################
-
-our ($SYS_epoll_create, $SYS_epoll_ctl, $SYS_epoll_wait);
-
-if ($^O eq "linux") {
-    my ($sysname, $nodename, $release, $version, $machine) = POSIX::uname();
-
-    # whether the machine requires 64-bit numbers to be on 8-byte
-    # boundaries.
-    my $u64_mod_8 = 0;
-
-    if ($machine =~ m/^i[3456]86$/) {
-        $SYS_epoll_create = 254;
-        $SYS_epoll_ctl    = 255;
-        $SYS_epoll_wait   = 256;
-    } elsif ($machine eq "x86_64") {
-        $SYS_epoll_create = 213;
-        $SYS_epoll_ctl    = 233;
-        $SYS_epoll_wait   = 232;
-    } elsif ($machine eq "ppc64") {
-        $SYS_epoll_create = 236;
-        $SYS_epoll_ctl    = 237;
-        $SYS_epoll_wait   = 238;
-        $u64_mod_8        = 1;
-    } elsif ($machine eq "ppc") {
-        $SYS_epoll_create = 236;
-        $SYS_epoll_ctl    = 237;
-        $SYS_epoll_wait   = 238;
-        $u64_mod_8        = 1;
-    } elsif ($machine eq "ia64") {
-        $SYS_epoll_create = 1243;
-        $SYS_epoll_ctl    = 1244;
-        $SYS_epoll_wait   = 1245;
-        $u64_mod_8        = 1;
-    }
-
-    if ($u64_mod_8) {
-        *epoll_wait = \&epoll_wait_mod8;
-        *epoll_ctl = \&epoll_ctl_mod8;
-    } else {
-        *epoll_wait = \&epoll_wait_mod4;
-        *epoll_ctl = \&epoll_ctl_mod4;
-    }
-
-    # if syscall numbers have been defined (and this module has been
-    # tested on) the arch above, then try to use it.  try means see if
-    # the syscall is implemented.  it may well be that this is Linux
-    # 2.4 and we don't even have it available.
-    $TryEpoll = 1 if $SYS_epoll_create;
-}
-
-# epoll_create wrapper
-# ARGS: (size)
-sub epoll_create {
-    my $epfd = eval { syscall($SYS_epoll_create, $_[0]) };
-    return -1 if $@;
-    return $epfd;
-}
-
-# epoll_ctl wrapper
-# ARGS: (epfd, op, fd, events_mask)
-sub epoll_ctl_mod4 {
-    syscall($SYS_epoll_ctl, $_[0]+0, $_[1]+0, $_[2]+0, pack("LLL", $_[3], $_[2], 0));
-}
-sub epoll_ctl_mod8 {
-    syscall($SYS_epoll_ctl, $_[0]+0, $_[1]+0, $_[2]+0, pack("LLLL", $_[3], 0, $_[2], 0));
-}
-
-# epoll_wait wrapper
-# ARGS: (epfd, maxevents, timeout (milliseconds), arrayref)
-#  arrayref: values modified to be [$fd, $event]
-our $epoll_wait_events;
-our $epoll_wait_size = 0;
-sub epoll_wait_mod4 {
-    # resize our static buffer if requested size is bigger than we've ever done
-    if ($_[1] > $epoll_wait_size) {
-        $epoll_wait_size = $_[1];
-        $epoll_wait_events = "\0" x 12 x $epoll_wait_size;
-    }
-    my $ct = syscall($SYS_epoll_wait, $_[0]+0, $epoll_wait_events, $_[1]+0, $_[2]+0);
-    for ($_ = 0; $_ < $ct; $_++) {
-        @{$_[3]->[$_]}[1,0] = unpack("LL", substr($epoll_wait_events, 12*$_, 8));
-    }
-    return $ct;
-}
-
-sub epoll_wait_mod8 {
-    # resize our static buffer if requested size is bigger than we've ever done
-    if ($_[1] > $epoll_wait_size) {
-        $epoll_wait_size = $_[1];
-        $epoll_wait_events = "\0" x 16 x $epoll_wait_size;
-    }
-    my $ct = syscall($SYS_epoll_wait, $_[0]+0, $epoll_wait_events, $_[1]+0, $_[2]+0);
-    for ($_ = 0; $_ < $ct; $_++) {
-        # 16 byte epoll_event structs, with format:
-        #    4 byte mask [idx 1]
-        #    4 byte padding (we put it into idx 2, useless)
-        #    8 byte data (first 4 bytes are fd, into idx 0)
-        @{$_[3]->[$_]}[1,2,0] = unpack("LLL", substr($epoll_wait_events, 16*$_, 12));
-    }
-    return $ct;
-}
-
 1;
-
 
 # Local Variables:
 # mode: perl
