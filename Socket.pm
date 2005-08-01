@@ -113,6 +113,9 @@ my $opt_bsd_resource = eval "use BSD::Resource; 1;";
 use vars qw{$VERSION};
 $VERSION = "1.43";
 
+use warnings;
+no  warnings qw(deprecated);
+
 use fields ('sock',              # underlying socket
             'fd',                # numeric file descriptor
             'write_buf',         # arrayref of scalars, scalarrefs, or coderefs to write

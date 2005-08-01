@@ -5,6 +5,7 @@ use Test::More tests => 24;
 use Danga::Socket;
 use IO::Socket::INET;
 use POSIX;
+no  warnings qw(deprecated);
 
 use vars qw($done);
 
