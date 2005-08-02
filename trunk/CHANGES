@@ -1,3 +1,5 @@
+   -- make tcp_cork a noop on non-linux (FIXME: port to bsd at least)
+
 1.43:
    -- don't even try epoll if not on a known/tested arch
    -- updated POD docs
