@@ -90,9 +90,7 @@ Matt Sergeant <matt@sergeant.org> - kqueue support
 
 Not documented enough.
 
-epoll is only used on Linux when the arch is one of x86, x86_64, ia64,
-ppc, and ppc64.  Mail me if you want to use this module with epoll
-mode on something else.  (ideally with a patch)
+tcp_cork only works on Linux for now.  No BSD push/nopush support.
 
 =head1 LICENSE
 
@@ -136,7 +134,7 @@ use Errno  qw(EINPROGRESS EWOULDBLOCK EISCONN ENOTSOCK
 use Socket qw(IPPROTO_TCP);
 use Carp   qw(croak confess);
 
-use constant TCP_CORK => 3; # FIXME: not hard-coded (Linux-specific too)
+use constant TCP_CORK => ($^O eq "linux" ? 3 : 0); # FIXME: not hard-coded (Linux-specific too)
 use constant DebugLevel => 0;
 
 use constant POLLIN        => 1;
@@ -658,9 +656,14 @@ sub tcp_cork {
     return unless $self->{sock};
     return if $val == $self->{corked};
 
-    # FIXME: Linux-specific.
-    my $rv = setsockopt($self->{sock}, IPPROTO_TCP, TCP_CORK,
-           pack("l", $val ? 1 : 0));
+    my $rv;
+    if (TCP_CORK) {
+        $rv = setsockopt($self->{sock}, IPPROTO_TCP, TCP_CORK,
+                         pack("l", $val ? 1 : 0));
+    } else {
+        # FIXME: implement freebsd *PUSH sockopts
+        $rv = 1;
+    }
 
     # if we failed, close (if we're not already) and warn about the error
     if ($rv) {
