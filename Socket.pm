@@ -109,7 +109,7 @@ use Time::HiRes ();
 my $opt_bsd_resource = eval "use BSD::Resource; 1;";
 
 use vars qw{$VERSION};
-$VERSION = "1.43";
+$VERSION = "1.44";
 
 use warnings;
 no  warnings qw(deprecated);
@@ -163,6 +163,7 @@ our (
      $DoProfile,                 # if on, enable profiling
      %Profiling,                 # what => [ utime, stime, calls ]
      $DoneInit,                  # if we've done the one-time module init yet
+     @Timers,                    # timers
      );
 
 Reset();
@@ -180,6 +181,7 @@ sub Reset {
     $LoopTimeout = -1;  # no timeout by default
     $DoProfile = 0;
     %Profiling = ();
+    @Timers = ();
 
     $PostLoopCallback = undef;
     %PLCMap = ();
@@ -260,6 +262,35 @@ sub DebugMsg {
     printf STDERR ">>> $fmt\n", @args;
 }
 
+### (CLASS) METHOD: AddTimer( $seconds, $coderef )
+### Add a timer to occur $seconds from now. $seconds may be fractional. Don't
+### expect this to be accurate though.
+sub AddTimer {
+    my $class = shift;
+    my ($secs, $coderef) = @_;
+
+    my $fire_time = Time::HiRes::time() + $secs;
+
+    if (!@Timers || $fire_time >= $Timers[-1][0]) {
+        push @Timers, [$fire_time, $coderef];
+        return;
+    }
+
+    # Now, where do we insert?  (NOTE: this appears slow, algorithm-wise,
+    # but it was compared against calendar queues, heaps, naive push/sort,
+    # and a bunch of other versions, and found to be fastest with a large
+    # variety of datasets.)
+    for (my $i = 0; $i < @Timers; $i++) {
+        if ($Timers[$i][0] > $fire_time) {
+            splice(@Timers, $i, 0, [$fire_time, $coderef]);
+            return;
+        }
+    }
+
+    die "Shouldn't get here.";
+}
+
+
 ### (CLASS) METHOD: DescriptorMap()
 ### Get the hash of Danga::Socket objects keyed by the file descriptor they are
 ### wrapping.
@@ -333,6 +364,26 @@ sub _post_profile {
     }
 }
 
+# runs timers and returns milliseconds for next one, or next event loop
+sub RunTimers {
+    return $LoopTimeout unless @Timers;
+
+    my $now = Time::HiRes::time();
+
+    # Run expired timers
+    while (@Timers && $Timers[0][0] <= $now) {
+        my $to_run = shift(@Timers);
+        $to_run->[1]->($now);
+    }
+
+    return $LoopTimeout unless @Timers;
+
+    my $timeout = ($Timers[0][0] - $now) * 1000;
+
+    return $LoopTimeout if $LoopTimeout < $timeout;
+    return $timeout;
+}
+
 ### The epoll-based event loop. Gets installed as EventLoop if IO::Epoll loads
 ### okay.
 sub EpollEventLoop {
@@ -347,82 +398,80 @@ sub EpollEventLoop {
     while (1) {
         my @events;
         my $i;
-        my $evcount;
-        # get up to 1000 events, class default timeout value
-        while (($evcount = epoll_wait($Epoll, 1000, $LoopTimeout, \@events)) >= 0) {
-          EVENT:
-            for ($i=0; $i<$evcount; $i++) {
-                my $ev = $events[$i];
+        my $timeout = RunTimers();
 
-                # it's possible epoll_wait returned many events, including some at the end
-                # that ones in the front triggered unregister-interest actions.  if we
-                # can't find the %sock entry, it's because we're no longer interested
-                # in that event.
-                my Danga::Socket $pob = $DescriptorMap{$ev->[0]};
-                my $code;
-                my $state = $ev->[1];
+        # get up to 1000 events
+        my $evcount = epoll_wait($Epoll, 1000, $timeout, \@events);
+      EVENT:
+        for ($i=0; $i<$evcount; $i++) {
+            my $ev = $events[$i];
 
-                # if we didn't find a Perlbal::Socket subclass for that fd, try other
-                # pseudo-registered (above) fds.
-                if (! $pob) {
-                    if (my $code = $OtherFds{$ev->[0]}) {
-                        $code->($state);
-                    } else {
-                        my $fd = $ev->[0];
-                        print STDERR "epoll() returned fd $fd w/ state $state for which we have no mapping.  removing.\n";
-                        POSIX::close($fd);
-                        epoll_ctl($Epoll, EPOLL_CTL_DEL, $fd, 0);
-                    }
-                    next;
+            # it's possible epoll_wait returned many events, including some at the end
+            # that ones in the front triggered unregister-interest actions.  if we
+            # can't find the %sock entry, it's because we're no longer interested
+            # in that event.
+            my Danga::Socket $pob = $DescriptorMap{$ev->[0]};
+            my $code;
+            my $state = $ev->[1];
+
+            # if we didn't find a Perlbal::Socket subclass for that fd, try other
+            # pseudo-registered (above) fds.
+            if (! $pob) {
+                if (my $code = $OtherFds{$ev->[0]}) {
+                    $code->($state);
+                } else {
+                    my $fd = $ev->[0];
+                    print STDERR "epoll() returned fd $fd w/ state $state for which we have no mapping.  removing.\n";
+                    POSIX::close($fd);
+                    epoll_ctl($Epoll, EPOLL_CTL_DEL, $fd, 0);
                 }
-
-                DebugLevel >= 1 && $class->DebugMsg("Event: fd=%d (%s), state=%d \@ %s\n",
-                                                    $ev->[0], ref($pob), $ev->[1], time);
-
-                if ($DoProfile) {
-                    my $class = ref $pob;
-
-                    # call profiling action on things that need to be done
-                    if ($state & EPOLLIN && ! $pob->{closed}) {
-                        _pre_profile();
-                        $pob->event_read;
-                        _post_profile("$class-read");
-                    }
-
-                    if ($state & EPOLLOUT && ! $pob->{closed}) {
-                        _pre_profile();
-                        $pob->event_write;
-                        _post_profile("$class-write");
-                    }
-
-                    if ($state & (EPOLLERR|EPOLLHUP)) {
-                        if ($state & EPOLLERR && ! $pob->{closed}) {
-                            _pre_profile();
-                            $pob->event_err;
-                            _post_profile("$class-err");
-                        }
-                        if ($state & EPOLLHUP && ! $pob->{closed}) {
-                            _pre_profile();
-                            $pob->event_hup;
-                            _post_profile("$class-hup");
-                        }
-                    }
-
-                    next;
-                }
-
-                # standard non-profiling codepat
-                $pob->event_read   if $state & EPOLLIN && ! $pob->{closed};
-                $pob->event_write  if $state & EPOLLOUT && ! $pob->{closed};
-                if ($state & (EPOLLERR|EPOLLHUP)) {
-                    $pob->event_err    if $state & EPOLLERR && ! $pob->{closed};
-                    $pob->event_hup    if $state & EPOLLHUP && ! $pob->{closed};
-                }
+                next;
             }
-            return unless PostEventLoop();
 
+            DebugLevel >= 1 && $class->DebugMsg("Event: fd=%d (%s), state=%d \@ %s\n",
+                                                $ev->[0], ref($pob), $ev->[1], time);
+
+            if ($DoProfile) {
+                my $class = ref $pob;
+
+                # call profiling action on things that need to be done
+                if ($state & EPOLLIN && ! $pob->{closed}) {
+                    _pre_profile();
+                    $pob->event_read;
+                    _post_profile("$class-read");
+                }
+
+                if ($state & EPOLLOUT && ! $pob->{closed}) {
+                    _pre_profile();
+                    $pob->event_write;
+                    _post_profile("$class-write");
+                }
+
+                if ($state & (EPOLLERR|EPOLLHUP)) {
+                    if ($state & EPOLLERR && ! $pob->{closed}) {
+                        _pre_profile();
+                        $pob->event_err;
+                        _post_profile("$class-err");
+                    }
+                    if ($state & EPOLLHUP && ! $pob->{closed}) {
+                        _pre_profile();
+                        $pob->event_hup;
+                        _post_profile("$class-hup");
+                    }
+                }
+
+                next;
+            }
+
+            # standard non-profiling codepat
+            $pob->event_read   if $state & EPOLLIN && ! $pob->{closed};
+            $pob->event_write  if $state & EPOLLOUT && ! $pob->{closed};
+            if ($state & (EPOLLERR|EPOLLHUP)) {
+                $pob->event_err    if $state & EPOLLERR && ! $pob->{closed};
+                $pob->event_hup    if $state & EPOLLHUP && ! $pob->{closed};
+            }
         }
-        print STDERR "Event loop ending; restarting.\n";
+        return unless PostEventLoop();
     }
     exit 0;
 }
@@ -435,6 +484,8 @@ sub PollEventLoop {
     my Danga::Socket $pob;
 
     while (1) {
+        my $timeout = RunTimers();
+
         # the following sets up @poll as a series of ($poll,$event_mask)
         # items, then uses IO::Poll::_poll, implemented in XS, which
         # modifies the array in place with the even elements being
@@ -450,13 +501,12 @@ sub PollEventLoop {
         # if nothing to poll, either end immediately (if no timeout)
         # or just keep calling the callback
         unless (@poll) {
-            my $timeout = $LoopTimeout > 0 ? $LoopTimeout : 1000;
             select undef, undef, undef, ($timeout / 1000);
             return unless PostEventLoop();
             next;
         }
 
-        my $count = IO::Poll::_poll($LoopTimeout, @poll);
+        my $count = IO::Poll::_poll($timeout, @poll);
         unless ($count) {
             return unless PostEventLoop();
             next;
@@ -498,7 +548,8 @@ sub KQueueEventLoop {
     }
 
     while (1) {
-        my @ret = $KQueue->kevent($LoopTimeout);
+        my $timeout = RunTimers();
+        my @ret = $KQueue->kevent($timeout);
         if (!@ret) {
             foreach my $fd ( keys %DescriptorMap ) {
                 my Danga::Socket $sock = $DescriptorMap{$fd};
@@ -514,6 +565,9 @@ sub KQueueEventLoop {
             if (!$pob) {
                 if (my $code = $OtherFds{$fd}) {
                     $code->($filter);
+                }  else {
+                    print STDERR "kevent() returned fd $fd for which we have no mapping.  removing.\n";
+                    POSIX::close($fd); # close deletes the kevent entry
                 }
                 next;
             }

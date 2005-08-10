@@ -1,3 +1,7 @@
+   -- adds code for when kqueue returns a fd we don't have a
+      mapping for (Matt Sergeant)
+   -- generic timer support (Matt Sergeant), use HiRes and rearrange
+      to share some code (Brad)
    -- make tcp_cork a noop on non-linux (FIXME: port to bsd at least)
 
 1.43:
