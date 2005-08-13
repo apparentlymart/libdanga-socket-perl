@@ -623,6 +623,7 @@ sub PostEventLoop {
         $loop = 0;
         foreach my $fd (keys %PushBackSet) {
             my Danga::Socket $pob = $PushBackSet{$fd};
+            die "ASSERT: the $pob socket has no read_push_back" unless @{$pob->{read_push_back}};
             next unless (! $pob->{closed} &&
                          $pob->{event_watch} & POLLIN);
             $loop = 1;
@@ -964,16 +965,16 @@ sub read {
     if (@{$self->{read_push_back}}) {
         $buf = shift @{$self->{read_push_back}};
         my $len = length($$buf);
-        if ($len <= $buf) {
-            unless (@{$self->{read_push_back}}) {
-                delete $PushBackSet{$self->{fd}};
-            }
+
+        die "ASSERT: a pushed-back read shouldn't be zero." if $len == 0;
+        if ($len <= $bytes) {
+            delete $PushBackSet{$self->{fd}} unless @{$self->{read_push_back}};
             return $buf;
         } else {
             # if the pushed back read is too big, we have to split it
             my $overflow = substr($$buf, $bytes);
             $buf = substr($$buf, 0, $bytes);
-            unshift @{$self->{read_push_back}}, \$overflow,
+            unshift @{$self->{read_push_back}}, \$overflow;
             return \$buf;
         }
     }
