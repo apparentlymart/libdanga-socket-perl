@@ -1,3 +1,7 @@
+   -- fix another bug in push_back_read... ancient:  comma instead of
+      semi-colon (can you tell nobody used this function before?)
+   -- fix a bug in push_back_read ... apparently it never actually
+      worked when you asked for less bytes than were available.
    -- adds code for when kqueue returns a fd we don't have a
       mapping for (Matt Sergeant)
    -- generic timer support (Matt Sergeant), use HiRes and rearrange
