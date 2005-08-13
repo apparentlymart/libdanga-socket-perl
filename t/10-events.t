@@ -83,7 +83,8 @@ sub event_read {
 package ClientIn;
 use base 'Danga::Socket';
 use fields (
-            'lines',  #[]
+            'got',
+            'state',
             );
 
 sub new {
@@ -93,16 +94,49 @@ sub new {
     $self->SUPER::new($sock);       # init base fields
     bless $self, ref $class || $class;
     $self->watch_read(1);
-    $self->{lines} = [];
+    $self->{state} = "init";
+    $self->{got}   = "";
     return $self;
 }
 
 sub event_read {
     my $self = shift;
-    my $bref = $self->read(5000);
-    Test::More::ok($$bref eq "Hello!\n", "ClientIn got hello");
-    $self->watch_read(0);
-    $main::done = 1;
+
+    my $go = sub {
+        $self->{state} = $_[0];
+        return;
+    };
+
+    if ($self->{state} eq "init") {
+        my $bref = $self->read(5);
+        Test::More::ok($$bref eq "Hello", "state 1: ClientIn got Hello");
+        $self->push_back_read("lo");
+        return $go->("step2");
+    }
+
+    if ($self->{state} eq "step2") {
+        my $bref = $self->read(3);
+        Test::More::ok($$bref eq "lo", "ask for more than what's in push_back_read");
+        $self->push_back_read("Hello");
+        return $go->("step3");
+    }
+
+    if ($self->{state} eq "step3") {
+        my $bref = $self->read(3);
+        Test::More::ok($$bref eq "Hel", "ask for less than what's in push_back_read");
+        $self->{got} = $$bref;
+        return $go->("step4");
+    }
+
+    if ($self->{state} eq "step4") {
+        my $bref = $self->read(500);
+        $self->{got} .= $$bref;
+        if ($self->{got} eq "Hello!\n") {
+            Test::More::ok(1, "ClientIn got Hello!");
+            $self->watch_read(0);
+            $main::done = 1;
+        }
+    }
 }
 
 

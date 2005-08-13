@@ -966,7 +966,6 @@ sub read {
         $buf = shift @{$self->{read_push_back}};
         my $len = length($$buf);
 
-        die "ASSERT: a pushed-back read shouldn't be zero." if $len == 0;
         if ($len <= $bytes) {
             delete $PushBackSet{$self->{fd}} unless @{$self->{read_push_back}};
             return $buf;
