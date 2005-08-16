@@ -1,7 +1,7 @@
 #!/usr/bin/perl -w
 
 use strict;
-use Test::More tests => 24;
+use Test::More tests => 30;
 use Danga::Socket;
 use IO::Socket::INET;
 use POSIX;
