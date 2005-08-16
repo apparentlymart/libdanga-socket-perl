@@ -11,7 +11,7 @@ use vars qw($done);
 
 SKIP: {
     my ($sysname, $nodename, $release, $version, $machine) = POSIX::uname();
-    skip "not on linux 2.6", 1 if $^O ne "linux" || $version =~ /^2\.[01234]/;
+    skip "not on linux 2.6", 1 if $^O ne "linux" || $release =~ /^2\.[01234]/;
     ok(Danga::Socket->HaveEpoll(), "using epoll");
 }
 
