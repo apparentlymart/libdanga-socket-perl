@@ -1,3 +1,19 @@
+1.46: (2005-08-24)
+   -- change all print STDERR to warn (so we can trap 'em with $SIG{__WARN__})
+   -- delay the removal of fds from DescriptorMap to eliminate warnings
+      when one fds in the same epoll_wait/etc return set kills one of
+      the others which hasn't been processed yet.  new test t/12-closerace.t to
+      demonstrate the situation.
+
+1.45: (2005-08-23)
+   -- don't hang forever if there is a timer but no sockets
+      and looptimeout is -1.  the problem was we always picked the
+      lesser time of LoopTimeout and NextTimerTimeout, but if LoopTimeout
+      was -1 (which means infinity), we preferred that, wrongly.
+   -- in RunTimers, calculate the milliseconds in integer, and add 1
+      to remove some floating point weirdness which caused 20-30 extra
+      loops which accomplished nothing.  see comments.
+
 1.44: (2005-08-16)
    -- fix another bug in push_back_read... ancient:  comma instead of
       semi-colon (can you tell nobody used this function before?)

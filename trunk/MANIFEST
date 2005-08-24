@@ -6,4 +6,5 @@ META.yml                                 Module meta-data (added by MakeMaker)
 t/00-use.t
 t/05-postloop.t
 t/10-events.t
+t/12-closerace.t
 
