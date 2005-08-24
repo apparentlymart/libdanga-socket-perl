@@ -1,4 +1,6 @@
 1.46: (2005-08-24)
+   -- warn about undef sockets in Danga::Socket's constructor, or overwriting
+      the descriptor map with a socket using the same fd as another in use.
    -- change all print STDERR to warn (so we can trap 'em with $SIG{__WARN__})
    -- delay the removal of fds from DescriptorMap to eliminate warnings
       when one fds in the same epoll_wait/etc return set kills one of

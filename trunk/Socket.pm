@@ -687,6 +687,10 @@ sub new {
 
     $self->{sock}        = $sock;
     my $fd = fileno($sock);
+
+    Carp::cluck("undef sock and/or fd in Danga::Socket->new.  sock=" . ($sock || "") . ", fd=" . ($fd || ""))
+        unless $sock && $fd;
+
     $self->{fd}          = $fd;
     $self->{write_buf}      = [];
     $self->{write_buf_offset} = 0;
@@ -710,6 +714,9 @@ sub new {
         $KQueue->EV_SET($fd, IO::KQueue::EVFILT_WRITE(),
                         IO::KQueue::EV_ADD() | IO::KQueue::EV_DISABLE());
     }
+
+    Carp::cluck("Danga::Socket::new blowing away existing descriptor map for fd=$fd ($DescriptorMap{$fd})")
+        if $DescriptorMap{$fd};
 
     $DescriptorMap{$fd} = $self;
     return $self;
