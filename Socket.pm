@@ -109,7 +109,7 @@ use Time::HiRes ();
 my $opt_bsd_resource = eval "use BSD::Resource; 1;";
 
 use vars qw{$VERSION};
-$VERSION = "1.44";
+$VERSION = "1.46";
 
 use warnings;
 no  warnings qw(deprecated);
@@ -378,8 +378,17 @@ sub RunTimers {
 
     return $LoopTimeout unless @Timers;
 
-    my $timeout = ($Timers[0][0] - $now) * 1000;
+    # convert time to an even number of milliseconds, adding 1
+    # extra, otherwise floating point fun can occur and we'll
+    # call RunTimers like 20-30 times, each returning a timeout
+    # of 0.0000212 seconds
+    my $timeout = int(($Timers[0][0] - $now) * 1000) + 1;
 
+    # -1 is an infinite timeout, so prefer a real timeout
+    return $timeout     if $LoopTimeout == -1;
+
+    # otherwise pick the lower of our regular timeout and time until
+    # the next timer
     return $LoopTimeout if $LoopTimeout < $timeout;
     return $timeout;
 }
@@ -391,7 +400,7 @@ sub EpollEventLoop {
 
     foreach my $fd ( keys %OtherFds ) {
         if (epoll_ctl($Epoll, EPOLL_CTL_ADD, $fd, EPOLLIN) == -1) {
-            print STDERR "epoll_ctl(): failure adding fd=$fd; $! (", $!+0, ")\n";
+            warn "epoll_ctl(): failure adding fd=$fd; $! (", $!+0, ")\n";
         }
     }
 
@@ -421,7 +430,7 @@ sub EpollEventLoop {
                     $code->($state);
                 } else {
                     my $fd = $ev->[0];
-                    print STDERR "epoll() returned fd $fd w/ state $state for which we have no mapping.  removing.\n";
+                    warn "epoll() returned fd $fd w/ state $state for which we have no mapping.  removing.\n";
                     POSIX::close($fd);
                     epoll_ctl($Epoll, EPOLL_CTL_DEL, $fd, 0);
                 }
@@ -566,7 +575,7 @@ sub KQueueEventLoop {
                 if (my $code = $OtherFds{$fd}) {
                     $code->($filter);
                 }  else {
-                    print STDERR "kevent() returned fd $fd for which we have no mapping.  removing.\n";
+                    warn "kevent() returned fd $fd for which we have no mapping.  removing.\n";
                     POSIX::close($fd); # close deletes the kevent entry
                 }
                 next;
@@ -634,7 +643,17 @@ sub PostEventLoop {
     # now we can close sockets that wanted to close during our event processing.
     # (we didn't want to close them during the loop, as we didn't want fd numbers
     #  being reused and confused during the event loop)
-    $_->close while ($_ = shift @ToClose);
+    while (my $sock = shift @ToClose) {
+        my $fd = fileno($sock);
+
+        # close the socket.  (not a Danga::Socket close)
+        $sock->close;
+
+        # and now we can finally remove the fd from the map.  see
+        # comment above in _cleanup.
+        delete $DescriptorMap{$fd};
+    }
+
 
     # by default we keep running, unless a postloop callback (either per-object
     # or global) cancels it
@@ -765,7 +784,7 @@ sub close {
     if (DebugLevel) {
         my ($pkg, $filename, $line) = caller;
         my $reason = $_[1] || "";
-        print STDERR "Closing \#$self->{fd} due to $pkg/$filename/$line ($reason)\n";
+        warn "Closing \#$self->{fd} due to $pkg/$filename/$line ($reason)\n";
     }
 
     # this does most of the work of closing us
@@ -809,9 +828,17 @@ sub _cleanup {
 
     # now delete from mappings.  this fd no longer belongs to us, so we don't want
     # to get alerts for it if it becomes writable/readable/etc.
-    delete $DescriptorMap{$self->{fd}};
     delete $PushBackSet{$self->{fd}};
     delete $PLCMap{$self->{fd}};
+
+    # we explicitly don't delete from DescriptorMap here until we
+    # actually close the socket, as we might be in the middle of
+    # processing an epoll_wait/etc that returned hundreds of fds, one
+    # of which is not yet processed and is what we're closing.  if we
+    # keep it in DescriptorMap, then the event harnesses can just
+    # looked at $pob->{closed} and ignore it.  but if it's an
+    # un-accounted for fd, then it (understandably) freak out a bit
+    # and emit warnings, thinking their state got off.
 
     # and finally get rid of our fd so we can't use it anywhere else
     $self->{fd} = undef;
@@ -1086,9 +1113,9 @@ sub dump_error {
         push @list, "\t$file:$line called $sub\n";
     }
 
-    print STDERR "ERROR: $_[1]\n" .
-                 "\t$_[0] = " . $_[0]->as_string . "\n" .
-                 join('', @list);
+    warn "ERROR: $_[1]\n" .
+        "\t$_[0] = " . $_[0]->as_string . "\n" .
+        join('', @list);
 }
 
 
