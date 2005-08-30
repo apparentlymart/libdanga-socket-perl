@@ -1150,10 +1150,12 @@ sub debugmsg {
 ### Returns the string describing the peer's IP
 sub peer_ip_string {
     my Danga::Socket $self = shift;
-    return undef unless $self->{sock};
+    return _undef("peer_ip_string undef: no sock") unless $self->{sock};
     return $self->{peer_ip} if defined $self->{peer_ip};
 
-    my $pn = getpeername($self->{sock}) or return undef;
+    my $pn = getpeername($self->{sock});
+    return _undef("peer_ip_string undef: getpeername") unless $pn;
+
     my ($port, $iaddr) = Socket::sockaddr_in($pn);
     $self->{peer_port} = $port;
 
@@ -1181,6 +1183,13 @@ sub as_string {
         $ret .= " to " . $self->peer_addr_string;
     }
     return $ret;
+}
+
+sub _undef {
+    return undef unless $ENV{DS_DEBUG};
+    my $msg = shift || "";
+    warn "Danga::Socket: $msg\n";
+    return undef;
 }
 
 1;
