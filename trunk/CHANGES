@@ -1,3 +1,8 @@
+   -- account for PostEventLoop running with two items in %PushBackSet,
+      the first of which closes the second, so the second would crash
+      trying to deref undef when it can't find the previously evaluated
+      key in the now-empty hash.
+
 1.46: (2005-08-24)
    -- warn about undef sockets in Danga::Socket's constructor, or overwriting
       the descriptor map with a socket using the same fd as another in use.
