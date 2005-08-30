@@ -632,6 +632,13 @@ sub PostEventLoop {
         $loop = 0;
         foreach my $fd (keys %PushBackSet) {
             my Danga::Socket $pob = $PushBackSet{$fd};
+
+            # a previous event_read invocation could've closed a
+            # connection that we already evaluated in "keys
+            # %PushBackSet", so skip ones that seem to have
+            # disappeared.  this is expected.
+            next unless $pob;
+
             die "ASSERT: the $pob socket has no read_push_back" unless @{$pob->{read_push_back}};
             next unless (! $pob->{closed} &&
                          $pob->{event_watch} & POLLIN);
