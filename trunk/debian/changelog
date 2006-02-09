@@ -1,3 +1,11 @@
+libdanga-socket-perl (1.48-1) unstable; urgency=low
+
+  * Applied patch from Eric Lambrecht <eml@guba.com> who noticed that calling
+    sysread in Perl w/ over ~5MB could cause Perl to just die and quit.
+    so limit reads to 5MB.
+
+ -- Pavel Skaldin <pskaldin@sixapart.com>  Thu,  9 Feb 2006 12:35:31 -0800
+
 libdanga-socket-perl (1.47-1) unstable; urgency=low
 
   * New upstream version 

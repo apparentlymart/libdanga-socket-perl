@@ -109,7 +109,7 @@ use Time::HiRes ();
 my $opt_bsd_resource = eval "use BSD::Resource; 1;";
 
 use vars qw{$VERSION};
-$VERSION = "1.47";
+$VERSION = "1.48";
 
 use warnings;
 no  warnings qw(deprecated);
@@ -1019,7 +1019,10 @@ sub read {
         }
     }
 
-    my $res = sysread($sock, $buf, $bytes, 0);
+    # max 5MB, or perl quits(!!)
+    my $req_bytes = $bytes > 5242880 ? 5242880 : $bytes;
+
+    my $res = sysread($sock, $buf, $req_bytes, 0);
     DebugLevel >= 2 && $self->debugmsg("sysread = %d; \$! = %d", $res, $!);
 
     if (! $res && $! != EWOULDBLOCK) {
