@@ -1,3 +1,8 @@
+1.48: (2005-10-12)
+   -- patch from Eric Lambrecht <eml@guba.com> who noticed that calling
+      sysread in Perl w/ over ~5MB could cause Perl to just die and quit.
+      so limit reads to 5MB.
+
 1.47: (2005-08-29)
    -- new $ENV{DS_DEBUG} to warn about weird conditions, which currently
       means just peer_ip_string returning undef.  trying to trace that down
