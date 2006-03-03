@@ -1,3 +1,8 @@
+1.49: (2006-03-02)
+   -- patch to allow pluggable writer functions per socket.  so you
+      can have SSL connections that do Net::SSLeay writes (or whatever)
+      instead of relying on tied handles.
+
 1.48: (2005-10-12)
    -- patch from Eric Lambrecht <eml@guba.com> who noticed that calling
       sysread in Perl w/ over ~5MB could cause Perl to just die and quit.

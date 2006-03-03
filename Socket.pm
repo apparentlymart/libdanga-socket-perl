@@ -109,7 +109,7 @@ use Time::HiRes ();
 my $opt_bsd_resource = eval "use BSD::Resource; 1;";
 
 use vars qw{$VERSION};
-$VERSION = "1.48";
+$VERSION = "1.49";
 
 use warnings;
 no  warnings qw(deprecated);
@@ -127,6 +127,7 @@ use fields ('sock',              # underlying socket
             'event_watch',       # bitmask of events the client is interested in (POLLIN,OUT,etc.)
             'peer_ip',           # cached stringified IP address of $sock
             'peer_port',         # cached port number of $sock
+            'writer_func',       # subref which does writing.  must return bytes written (or undef) and set $! on errors
             );
 
 use Errno  qw(EINPROGRESS EWOULDBLOCK EISCONN ENOTSOCK
@@ -865,6 +866,12 @@ sub sock {
     return $self->{sock};
 }
 
+sub set_writer_func {
+   my Danga::Socket $self = shift;
+   my $wtr = shift;
+   Carp::croak("Not a subref") unless !defined $wtr || ref $wtr eq "CODE";
+   $self->{writer_func} = $wtr;
+}
 
 ### METHOD: write( $data )
 ### Write the specified data to the underlying handle.  I<data> may be scalar,
@@ -932,7 +939,12 @@ sub write {
         }
 
         my $to_write = $len - $self->{write_buf_offset};
-        my $written = syswrite($self->{sock}, $$bref, $to_write, $self->{write_buf_offset});
+        my $written;
+        if (my $wtr = $self->{writer_func}) {
+            $written = $wtr->($bref, $to_write, $self->{write_buf_offset});
+        } else {
+            $written = syswrite($self->{sock}, $$bref, $to_write, $self->{write_buf_offset});
+        }
 
         if (! defined $written) {
             if ($! == EPIPE) {
