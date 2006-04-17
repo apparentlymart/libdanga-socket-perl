@@ -103,13 +103,14 @@ terms as Perl itself.
 
 package Danga::Socket;
 use strict;
+use bytes;
 use POSIX ();
 use Time::HiRes ();
 
 my $opt_bsd_resource = eval "use BSD::Resource; 1;";
 
 use vars qw{$VERSION};
-$VERSION = "1.49";
+$VERSION = "1.50";
 
 use warnings;
 no  warnings qw(deprecated);
