@@ -110,7 +110,7 @@ use Time::HiRes ();
 my $opt_bsd_resource = eval "use BSD::Resource; 1;";
 
 use vars qw{$VERSION};
-$VERSION = "1.50";
+$VERSION = "1.51";
 
 use warnings;
 no  warnings qw(deprecated);
@@ -977,7 +977,7 @@ sub write {
             # interested in pending writes:
             $self->{write_buf_offset} += $written;
             $self->{write_buf_size} -= $written;
-            $self->watch_write(1);
+            $self->on_incomplete_write;
             return 0;
         } elsif ($written == $to_write) {
             DebugLevel >= 2 && $self->debugmsg("Wrote ALL %d bytes to %d (nq=%d)",
@@ -996,6 +996,11 @@ sub write {
             next WRITE;
         }
     }
+}
+
+sub on_incomplete_write {
+    my Danga::Socket $self = shift;
+    $self->watch_write(1);
 }
 
 ### METHOD: push_back_read( $buf )

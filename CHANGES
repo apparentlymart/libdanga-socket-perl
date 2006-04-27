@@ -1,3 +1,8 @@
+1.51: (2006-04-27)
+   -- let subclasses overwrite the behavior on incomplete writes.
+      default, as always, is just to force watching of writability.
+      but during, say, SSL stuff, it's useful to disable that.
+
 1.50: (2006-04-17)
    -- use bytes.  was affecting djabberd with unicode XML messages.
       diagnosis by Artur Bergman and Tatsuhiko Miyagawa.
