@@ -110,7 +110,7 @@ use Time::HiRes ();
 my $opt_bsd_resource = eval "use BSD::Resource; 1;";
 
 use vars qw{$VERSION};
-$VERSION = "1.51";
+$VERSION = "1.52";
 
 use warnings;
 no  warnings qw(deprecated);
@@ -1177,7 +1177,15 @@ sub peer_ip_string {
     my $pn = getpeername($self->{sock});
     return _undef("peer_ip_string undef: getpeername") unless $pn;
 
-    my ($port, $iaddr) = Socket::sockaddr_in($pn);
+    my ($port, $iaddr) = eval {
+        Socket::sockaddr_in($pn);
+    };
+
+    if ($@) {
+        $self->{peer_port} = "[Unknown peerport '$@']";
+        return "[Unknown peername '$@']";
+    }
+
     $self->{peer_port} = $port;
 
     return $self->{peer_ip} = Socket::inet_ntoa($iaddr);
