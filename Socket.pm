@@ -273,9 +273,11 @@ sub AddTimer {
 
     my $fire_time = Time::HiRes::time() + $secs;
 
+    my $timer = bless [$fire_time, $coderef], "Danga::Socket::Timer";
+
     if (!@Timers || $fire_time >= $Timers[-1][0]) {
-        push @Timers, [$fire_time, $coderef];
-        return;
+        push @Timers, $timer;
+        return $timer;
     }
 
     # Now, where do we insert?  (NOTE: this appears slow, algorithm-wise,
@@ -284,8 +286,8 @@ sub AddTimer {
     # variety of datasets.)
     for (my $i = 0; $i < @Timers; $i++) {
         if ($Timers[$i][0] > $fire_time) {
-            splice(@Timers, $i, 0, [$fire_time, $coderef]);
-            return;
+            splice(@Timers, $i, 0, $timer);
+            return $timer;
         }
     }
 
@@ -375,7 +377,7 @@ sub RunTimers {
     # Run expired timers
     while (@Timers && $Timers[0][0] <= $now) {
         my $to_run = shift(@Timers);
-        $to_run->[1]->($now);
+        $to_run->[1]->($now) if $to_run->[1];
     }
 
     return $LoopTimeout unless @Timers;
@@ -1219,6 +1221,12 @@ sub _undef {
     my $msg = shift || "";
     warn "Danga::Socket: $msg\n";
     return undef;
+}
+
+package Danga::Socket::Timer;
+# [$abs_float_firetime, $coderef];
+sub cancel {
+    $_[0][1] = undef;
 }
 
 1;

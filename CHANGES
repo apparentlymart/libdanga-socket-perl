@@ -1,3 +1,11 @@
+1.52: (2006-07-09)
+   -- AddTimer now returns a Danga::Socket::Timer object which you can
+      call the 'cancel' method on.
+
+   -- A good catch by Whitaker. If an epoll_ctl problem occurs when
+      manipulatiing something that isn't an INET domain socket, the
+      unpacking of remote information will fail.
+
 1.51: (2006-04-27)
    -- let subclasses overwrite the behavior on incomplete writes.
       default, as always, is just to force watching of writability.
