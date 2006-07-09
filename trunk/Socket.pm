@@ -870,7 +870,7 @@ sub sock {
 sub set_writer_func {
    my Danga::Socket $self = shift;
    my $wtr = shift;
-   Carp::croak("Not a subref") unless !defined $wtr || ref $wtr eq "CODE";
+   Carp::croak("Not a subref") unless !defined $wtr || UNIVERSAL::isa($wtr, "CODE");
    $self->{writer_func} = $wtr;
 }
 
@@ -921,7 +921,7 @@ sub write {
             $len = length($$bref); # this will die if $bref is a code ref, caught below
         };
         if ($@) {
-            if (ref $bref eq "CODE") {
+            if (UNIVERSAL::isa($bref, "CODE")) {
                 unless ($need_queue) {
                     $self->{write_buf_size}--; # code refs are worth 1
                     shift @{$self->{write_buf}};
