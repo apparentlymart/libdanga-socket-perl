@@ -1,7 +1,7 @@
 #!/usr/bin/perl -w
 
 use strict;
-use Test::More tests => 30;
+use Test::More tests => 34;
 use Danga::Socket;
 use IO::Socket::INET;
 use POSIX;
@@ -94,6 +94,10 @@ sub new {
     $self->SUPER::new($sock);       # init base fields
     bless $self, ref $class || $class;
     $self->watch_read(1);
+    my $peer_str  = $self->peer_addr_string();
+    my $local_str = $self->local_addr_string();
+    Test::More::ok($peer_str, "New connection from host $peer_str");
+    Test::More::ok($local_str, "... on host $local_str");
     $self->{state} = "init";
     $self->{got}   = "";
     return $self;

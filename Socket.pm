@@ -128,6 +128,8 @@ use fields ('sock',              # underlying socket
             'event_watch',       # bitmask of events the client is interested in (POLLIN,OUT,etc.)
             'peer_ip',           # cached stringified IP address of $sock
             'peer_port',         # cached port number of $sock
+            'local_ip',          # cached stringified IP address of local end of $sock
+            'local_port',        # cached port number of local end of $sock
             'writer_func',       # subref which does writing.  must return bytes written (or undef) and set $! on errors
             );
 
@@ -563,14 +565,6 @@ sub KQueueEventLoop {
     while (1) {
         my $timeout = RunTimers();
         my @ret = $KQueue->kevent($timeout);
-        if (!@ret) {
-            foreach my $fd ( keys %DescriptorMap ) {
-                my Danga::Socket $sock = $DescriptorMap{$fd};
-                if ($sock->can('ticker')) {
-                    $sock->ticker;
-                }
-            }
-        }
 
         foreach my $kev (@ret) {
             my ($fd, $filter, $flags, $fflags) = @$kev;
@@ -1019,6 +1013,7 @@ sub push_back_read {
 ### ref on read, or undef on connection closed.
 sub read {
     my Danga::Socket $self = shift;
+    return if $self->{closed};
     my $bytes = shift;
     my $buf;
     my $sock = $self->{sock};
@@ -1201,6 +1196,32 @@ sub peer_addr_string {
     my $ip = $self->peer_ip_string;
     return $ip ? "$ip:$self->{peer_port}" : undef;
 }
+
+### METHOD: local_ip_string()
+### Returns the string describing the local IP
+sub local_ip_string {
+    my Danga::Socket $self = shift;
+    return _undef("local_ip_string undef: no sock") unless $self->{sock};
+    return $self->{local_ip} if defined $self->{local_ip};
+
+    my $pn = getsockname($self->{sock});
+    return _undef("local_ip_string undef: getsockname") unless $pn;
+
+    my ($port, $iaddr) = Socket::sockaddr_in($pn);
+    $self->{local_port} = $port;
+
+    return $self->{local_ip} = Socket::inet_ntoa($iaddr);
+}
+
+### METHOD: local_addr_string()
+### Returns the string describing the local end of the socket which underlies this
+### object in form "ip:port"
+sub local_addr_string {
+    my Danga::Socket $self = shift;
+    my $ip = $self->local_ip_string;
+    return $ip ? "$ip:$self->{local_port}" : undef;
+}
+
 
 ### METHOD: as_string()
 ### Returns a string describing this socket.
