@@ -1,6 +1,8 @@
    -- Don't allow ->read() if socket has been closed (msergeant).
    -- Added local_ip_string() and local_addr_string() (msergeant).
    -- Removed bogus 'ticker' code from KQueue event loop (msergeant).
+   -- Converted comment based docs to POD and fix some of those docs
+      to match reality (msergeant).
 
 1.52: (2006-07-09)
    -- AddTimer now returns a Danga::Socket::Timer object which you can

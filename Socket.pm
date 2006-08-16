@@ -76,26 +76,16 @@ too.
 For now, see servers using Danga::Socket for guidance.  For example:
 perlbal, mogilefsd, or ddlockd.
 
-=head1 AUTHORS
+=head1 API
 
-Brad Fitzpatrick <brad@danga.com> - author
+Note where "C<CLASS>" is used below, normally you would call these methods as:
 
-Michael Granger <ged@danga.com> - docs, testing
+  Danga::Socket->method(...);
 
-Mark Smith <junior@danga.com> - contributor, heavy user, testing
+However using a subclass works too.
 
-Matt Sergeant <matt@sergeant.org> - kqueue support
-
-=head1 BUGS
-
-Not documented enough.
-
-tcp_cork only works on Linux for now.  No BSD push/nopush support.
-
-=head1 LICENSE
-
-License is granted to use and distribute this module under the same
-terms as Perl itself.
+The CLASS methods are all methods for the event loop part of Danga::Socket,
+whereas the object methods are all used on your subclasses.
 
 =cut
 
@@ -176,7 +166,11 @@ Reset();
 ### C L A S S   M E T H O D S
 #####################################################################
 
-# (CLASS) method: reset all state
+=head2 C<< CLASS->Reset() >>
+
+Reset all state
+
+=cut
 sub Reset {
     %DescriptorMap = ();
     %PushBackSet = ();
@@ -191,23 +185,32 @@ sub Reset {
     %PLCMap = ();
 }
 
-### (CLASS) METHOD: HaveEpoll()
-### Returns a true value if this class will use IO::Epoll for async IO.
+=head2 C<< CLASS->HaveEpoll() >>
+
+Returns a true value if this class will use IO::Epoll for async IO.
+
+=cut
 sub HaveEpoll {
     _InitPoller();
     return $HaveEpoll;
 }
 
-### (CLASS) METHOD: WatchedSockets()
-### Returns the number of file descriptors which are registered with the global
-### poll object.
+=head2 C<< CLASS->WatchedSockets() >>
+
+Returns the number of file descriptors which are registered with the global
+poll object.
+
+=cut
 sub WatchedSockets {
     return scalar keys %DescriptorMap;
 }
 *watched_sockets = *WatchedSockets;
 
-### (CLASS) METHOD: EnableProfiling()
-### Turns profiling on, clearing current profiling data.
+=head2 C<< CLASS->EnableProfiling() >>
+
+Turns profiling on, clearing current profiling data.
+
+=cut
 sub EnableProfiling {
     if ($opt_bsd_resource) {
         %Profiling = ();
@@ -217,58 +220,89 @@ sub EnableProfiling {
     return 0;
 }
 
-### (CLASS) METHOD: DisableProfiling()
-### Turns off profiling, but retains data up to this point
+=head2 C<< CLASS->DisableProfiling() >>
+
+Turns off profiling, but retains data up to this point
+
+=cut
 sub DisableProfiling {
     $DoProfile = 0;
 }
 
-### (CLASS) METHOD: ProfilingData()
-### Returns reference to a hash of data in format above (see %Profiling)
+=head2 C<< CLASS->ProfilingData() >>
+
+Returns reference to a hash of data in format:
+
+  ITEM => [ utime, stime, #calls ]
+
+=cut
 sub ProfilingData {
     return \%Profiling;
 }
 
-### (CLASS) METHOD: ToClose()
-### Return the list of sockets that are awaiting close() at the end of the
-### current event loop.
+=head2 C<< CLASS->ToClose() >>
+
+Return the list of sockets that are awaiting close() at the end of the
+current event loop.
+
+=cut
 sub ToClose { return @ToClose; }
 
-### (CLASS) METHOD: OtherFds( [%fdmap] )
-### Get/set the hash of file descriptors that need processing in parallel with
-### the registered Danga::Socket objects.
+=head2 C<< CLASS->OtherFds( [%fdmap] ) >>
+
+Get/set the hash of file descriptors that need processing in parallel with
+the registered Danga::Socket objects.
+
+=cut
 sub OtherFds {
     my $class = shift;
     if ( @_ ) { %OtherFds = @_ }
     return wantarray ? %OtherFds : \%OtherFds;
 }
 
-### (CLASS) METHOD: AddOtherFds( [%fdmap] )
-### Add fds to the OtherFds hash for processing.
+=head2 C<< CLASS->AddOtherFds( [%fdmap] ) >>
+
+Add fds to the OtherFds hash for processing.
+
+=cut
 sub AddOtherFds {
     my $class = shift;
     %OtherFds = ( %OtherFds, @_ ); # FIXME investigate what happens on dupe fds
     return wantarray ? %OtherFds : \%OtherFds;
 }
 
-### (CLASS) METHOD: SetLoopTimeout( $timeout )
-### Set the loop timeout for the event loop to some value in milliseconds.
+=head2 C<< CLASS->SetLoopTimeout( $timeout ) >>
+
+Set the loop timeout for the event loop to some value in milliseconds.
+
+A timeout of 0 (zero) means poll forever. A timeout of -1 means poll and return
+immediately.
+
+=cut
 sub SetLoopTimeout {
     return $LoopTimeout = $_[1] + 0;
 }
 
-### (CLASS) METHOD: DebugMsg( $format, @args )
-### Print the debugging message specified by the C<sprintf>-style I<format> and
-### I<args>
+=head2 C<< CLASS->DebugMsg( $format, @args ) >>
+
+Print the debugging message specified by the C<sprintf>-style I<format> and
+I<args>
+
+=cut
 sub DebugMsg {
     my ( $class, $fmt, @args ) = @_;
     chomp $fmt;
     printf STDERR ">>> $fmt\n", @args;
 }
 
-### (CLASS) METHOD: AddTimer( $seconds, $coderef )
-### Add a timer to occur $seconds from now. $seconds may be fractional. Don't
-### expect this to be accurate though.
+=head2 C<< CLASS->AddTimer( $seconds, $coderef ) >>
+
+Add a timer to occur $seconds from now. $seconds may be fractional, but timers
+are not guaranteed to fire at the exact time you ask for.
+
+Returns a timer object which you can call C<< $timer->cancel >> on if you need to.
+
+=cut
 sub AddTimer {
     my $class = shift;
     my ($secs, $coderef) = @_;
@@ -296,10 +330,14 @@ sub AddTimer {
     die "Shouldn't get here.";
 }
 
+=head2 C<< CLASS->DescriptorMap() >>
 
-### (CLASS) METHOD: DescriptorMap()
-### Get the hash of Danga::Socket objects keyed by the file descriptor they are
-### wrapping.
+Get the hash of Danga::Socket objects keyed by the file descriptor (fileno) they
+are wrapping.
+
+Returns a hash in list context or a hashref in scalar context.
+
+=cut
 sub DescriptorMap {
     return wantarray ? %DescriptorMap : \%DescriptorMap;
 }
@@ -332,8 +370,12 @@ sub _InitPoller
     }
 }
 
-### FUNCTION: EventLoop()
-### Start processing IO events.
+=head2 C<< CLASS->EventLoop() >>
+
+Start processing IO events. In most daemon programs this never exits. See
+C<PostLoopCallback> below for how to exit the loop.
+
+=cut
 sub EventLoop {
     my $class = shift;
 
@@ -598,11 +640,17 @@ sub KQueueEventLoop {
     exit(0);
 }
 
-### CLASS METHOD: SetPostLoopCallback
-### Sets post loop callback function.  Pass a subref and it will be
-### called every time the event loop finishes.  Return 1 from the sub
-### to make the loop continue, else it will exit.  The function will
-### be passed two parameters: \%DescriptorMap, \%OtherFds.
+=head2 C<< CLASS->SetPostLoopCallback( CODEREF ) >>
+
+Sets post loop callback function.  Pass a subref and it will be
+called every time the event loop finishes.
+
+Return 1 (or any true value) from the sub to make the loop continue, 0 or false
+and it will exit.
+
+The callback function will be passed two parameters: \%DescriptorMap, \%OtherFds.
+
+=cut
 sub SetPostLoopCallback {
     my ($class, $ref) = @_;
 
@@ -681,9 +729,18 @@ sub PostEventLoop {
 ### Danga::Socket-the-object code
 #####################################################################
 
-### METHOD: new( $socket )
-### Create a new Danga::Socket object for the given I<socket> which will react
-### to events on it during the C<wait_loop>.
+=head2 OBJECT METHODS
+
+=head2 C<< CLASS->new( $socket ) >>
+
+Create a new Danga::Socket subclass object for the given I<socket> which will
+react to events on it during the C<EventLoop>.
+
+This is normally (always?) called from your subclass via:
+
+  $class->SUPER::new($socket);
+
+=cut
 sub new {
     my Danga::Socket $self = shift;
     $self = fields::new($self) unless ref $self;
@@ -732,8 +789,11 @@ sub new {
 ### I N S T A N C E   M E T H O D S
 #####################################################################
 
-### METHOD: tcp_cork( $boolean )
-### Turn TCP_CORK on or off depending on the value of I<boolean>.
+=head2 C<< $obj->tcp_cork( $boolean ) >>
+
+Turn TCP_CORK on or off depending on the value of I<boolean>.
+
+=cut
 sub tcp_cork {
     my Danga::Socket $self = $_[0];
     my $val = $_[1];
@@ -769,10 +829,13 @@ sub tcp_cork {
     }
 }
 
-### METHOD: steal_socket
-### Basically returns our socket and makes it so that we don't try to close it,
-### but we do remove it from epoll handlers.  THIS CLOSES $self.  It is the same
-### thing as calling close, except it gives you the socket to use.
+=head2 C<< $obj->steal_socket() >>
+
+Basically returns our socket and makes it so that we don't try to close it,
+but we do remove it from epoll handlers.  THIS CLOSES $self.  It is the same
+thing as calling close, except it gives you the socket to use.
+
+=cut
 sub steal_socket {
     my Danga::Socket $self = $_[0];
     return if $self->{closed};
@@ -786,8 +849,11 @@ sub steal_socket {
     return $sock;
 }
 
-### METHOD: close( [$reason] )
-### Close the socket. The I<reason> argument will be used in debugging messages.
+=head2 C<< $obj->close( [$reason] ) >>
+
+Close the socket. The I<reason> argument will be used in debugging messages.
+
+=cut
 sub close {
     my Danga::Socket $self = $_[0];
     return if $self->{closed};
@@ -856,13 +922,21 @@ sub _cleanup {
     $self->{fd} = undef;
 }
 
-### METHOD: sock()
-### Returns the underlying IO::Handle for the object.
+=head2 C<< $obj->sock() >>
+
+Returns the underlying IO::Handle for the object.
+
+=cut
 sub sock {
     my Danga::Socket $self = shift;
     return $self->{sock};
 }
 
+=head2 C<< $obj->set_writer_func( CODEREF ) >>
+
+Sets a function to use instead of C<syswrite()> when writing data to the socket.
+
+=cut
 sub set_writer_func {
    my Danga::Socket $self = shift;
    my $wtr = shift;
@@ -870,11 +944,14 @@ sub set_writer_func {
    $self->{writer_func} = $wtr;
 }
 
-### METHOD: write( $data )
-### Write the specified data to the underlying handle.  I<data> may be scalar,
-### scalar ref, code ref (to run when there), or undef just to kick-start.
-### Returns 1 if writes all went through, or 0 if there are writes in queue. If
-### it returns 1, caller should stop waiting for 'writable' events)
+=head2 C<< $obj->write( $data ) >>
+
+Write the specified data to the underlying handle.  I<data> may be scalar,
+scalar ref, code ref (to run when there), or undef just to kick-start.
+Returns 1 if writes all went through, or 0 if there are writes in queue. If
+it returns 1, caller should stop waiting for 'writable' events)
+
+=cut
 sub write {
     my Danga::Socket $self;
     my $data;
@@ -999,8 +1076,12 @@ sub on_incomplete_write {
     $self->watch_write(1);
 }
 
-### METHOD: push_back_read( $buf )
-### Push back I<buf> (a scalar or scalarref) into the read stream
+=head2 C<< $obj->push_back_read( $buf ) >>
+
+Push back I<buf> (a scalar or scalarref) into the read stream. Useful if you read
+more than you need to and want to return this data on the next "read".
+
+=cut
 sub push_back_read {
     my Danga::Socket $self = shift;
     my $buf = shift;
@@ -1008,9 +1089,12 @@ sub push_back_read {
     $PushBackSet{$self->{fd}} = $self;
 }
 
-### METHOD: read( $bytecount )
-### Read at most I<bytecount> bytes from the underlying handle; returns scalar
-### ref on read, or undef on connection closed.
+=head2 C<< $obj->read( $bytecount ) >>
+
+Read at most I<bytecount> bytes from the underlying handle; returns scalar
+ref on read, or undef on connection closed.
+
+=cut
 sub read {
     my Danga::Socket $self = shift;
     return if $self->{closed};
@@ -1049,40 +1133,50 @@ sub read {
     return \$buf;
 }
 
+=head2 (VIRTUAL) C<< $obj->event_read() >>
 
-### (VIRTUAL) METHOD: event_read()
-### Readable event handler. Concrete deriviatives of Danga::Socket should
-### provide an implementation of this. The default implementation will die if
-### called.
+Readable event handler. Concrete deriviatives of Danga::Socket should
+provide an implementation of this. The default implementation will die if
+called.
+
+=cut
 sub event_read  { die "Base class event_read called for $_[0]\n"; }
 
+=head2 (VIRTUAL) C<< $obj->event_err() >>
 
-### (VIRTUAL) METHOD: event_err()
-### Error event handler. Concrete deriviatives of Danga::Socket should
-### provide an implementation of this. The default implementation will die if
-### called.
+Error event handler. Concrete deriviatives of Danga::Socket should
+provide an implementation of this. The default implementation will die if
+called.
+
+=cut
 sub event_err   { die "Base class event_err called for $_[0]\n"; }
 
+=head2 (VIRTUAL) C<< $obj->event_hup() >>
 
-### (VIRTUAL) METHOD: event_hup()
-### 'Hangup' event handler. Concrete deriviatives of Danga::Socket should
-### provide an implementation of this. The default implementation will die if
-### called.
+'Hangup' event handler. Concrete deriviatives of Danga::Socket should
+provide an implementation of this. The default implementation will die if
+called.
+
+=cut
 sub event_hup   { die "Base class event_hup called for $_[0]\n"; }
 
+=head2 C<< $obj->event_write() >>
 
-### METHOD: event_write()
-### Writable event handler. Concrete deriviatives of Danga::Socket may wish to
-### provide an implementation of this. The default implementation calls
-### C<write()> with an C<undef>.
+Writable event handler. Concrete deriviatives of Danga::Socket may wish to
+provide an implementation of this. The default implementation calls
+C<write()> with an C<undef>.
+
+=cut
 sub event_write {
     my $self = shift;
     $self->write(undef);
 }
 
+=head2 C<< $obj->watch_read( $boolean ) >>
 
-### METHOD: watch_read( $boolean )
-### Turn 'readable' event notification on or off.
+Turn 'readable' event notification on or off.
+
+=cut
 sub watch_read {
     my Danga::Socket $self = shift;
     return if $self->{closed} || !$self->{sock};
@@ -1108,8 +1202,11 @@ sub watch_read {
     }
 }
 
-### METHOD: watch_write( $boolean )
-### Turn 'writable' event notification on or off.
+=head2 C<< $obj->watch_write( $boolean ) >>
+
+Turn 'writable' event notification on or off.
+
+=cut
 sub watch_write {
     my Danga::Socket $self = shift;
     return if $self->{closed} || !$self->{sock};
@@ -1135,9 +1232,12 @@ sub watch_write {
     }
 }
 
-# METHOD: dump_error( $message )
-# Prints to STDERR a backtrace with information about this socket and what lead
-# up to the dump_error call.
+=head2 C<< $obj->dump_error( $message ) >>
+
+Prints to STDERR a backtrace with information about this socket and what lead
+up to the dump_error call.
+
+=cut
 sub dump_error {
     my $i = 0;
     my @list;
@@ -1150,11 +1250,12 @@ sub dump_error {
         join('', @list);
 }
 
+=head2 C<< $obj->debugmsg( $format, @args ) >>
 
-### METHOD: debugmsg( $format, @args )
-### Print the debugging message specified by the C<sprintf>-style I<format> and
-### I<args> if the object's C<debug_level> is greater than or equal to the given
-### I<level>.
+Print the debugging message specified by the C<sprintf>-style I<format> and
+I<args>.
+
+=cut
 sub debugmsg {
     my ( $self, $fmt, @args ) = @_;
     confess "Not an object" unless ref $self;
@@ -1164,8 +1265,11 @@ sub debugmsg {
 }
 
 
-### METHOD: peer_ip_string()
-### Returns the string describing the peer's IP
+=head2 C<< $obj->peer_ip_string() >>
+
+Returns the string describing the peer's IP
+
+=cut
 sub peer_ip_string {
     my Danga::Socket $self = shift;
     return _undef("peer_ip_string undef: no sock") unless $self->{sock};
@@ -1188,17 +1292,23 @@ sub peer_ip_string {
     return $self->{peer_ip} = Socket::inet_ntoa($iaddr);
 }
 
-### METHOD: peer_addr_string()
-### Returns the string describing the peer for the socket which underlies this
-### object in form "ip:port"
+=head2 C<< $obj->peer_addr_string() >>
+
+Returns the string describing the peer for the socket which underlies this
+object in form "ip:port"
+
+=cut
 sub peer_addr_string {
     my Danga::Socket $self = shift;
     my $ip = $self->peer_ip_string;
     return $ip ? "$ip:$self->{peer_port}" : undef;
 }
 
-### METHOD: local_ip_string()
-### Returns the string describing the local IP
+=head2 C<< $obj->local_ip_string() >>
+
+Returns the string describing the local IP
+
+=cut
 sub local_ip_string {
     my Danga::Socket $self = shift;
     return _undef("local_ip_string undef: no sock") unless $self->{sock};
@@ -1213,9 +1323,12 @@ sub local_ip_string {
     return $self->{local_ip} = Socket::inet_ntoa($iaddr);
 }
 
-### METHOD: local_addr_string()
-### Returns the string describing the local end of the socket which underlies this
-### object in form "ip:port"
+=head2 C<< $obj->local_addr_string() >>
+
+Returns the string describing the local end of the socket which underlies this
+object in form "ip:port"
+
+=cut
 sub local_addr_string {
     my Danga::Socket $self = shift;
     my $ip = $self->local_ip_string;
@@ -1223,8 +1336,11 @@ sub local_addr_string {
 }
 
 
-### METHOD: as_string()
-### Returns a string describing this socket.
+=head2 C<< $obj->as_string() >>
+
+Returns a string describing this socket.
+
+=cut
 sub as_string {
     my Danga::Socket $self = shift;
     my $rw = "(" . ($self->{event_watch} & POLLIN ? 'R' : '') .
@@ -1249,6 +1365,29 @@ package Danga::Socket::Timer;
 sub cancel {
     $_[0][1] = undef;
 }
+
+=head1 AUTHORS
+
+Brad Fitzpatrick <brad@danga.com> - author
+
+Michael Granger <ged@danga.com> - docs, testing
+
+Mark Smith <junior@danga.com> - contributor, heavy user, testing
+
+Matt Sergeant <matt@sergeant.org> - kqueue support, docs, timers, other bits
+
+=head1 BUGS
+
+Not documented enough (but isn't that true of every project?).
+
+tcp_cork only works on Linux for now.  No BSD push/nopush support.
+
+=head1 LICENSE
+
+License is granted to use and distribute this module under the same
+terms as Perl itself.
+
+=cut
 
 1;
 
