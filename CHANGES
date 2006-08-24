@@ -1,3 +1,4 @@
+1.53 (2006-08-24)
    -- Don't allow ->read() if socket has been closed (msergeant).
    -- Added local_ip_string() and local_addr_string() (msergeant).
    -- Removed bogus 'ticker' code from KQueue event loop (msergeant).
