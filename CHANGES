@@ -1,3 +1,7 @@
+1.54 (2006-11-13)
+   -- cap sysreads at 1MB, not 5MB.  seems to crash perl less for
+      more people.  *sigh*
+
 1.53 (2006-08-24)
    -- Don't allow ->read() if socket has been closed (msergeant).
    -- Added local_ip_string() and local_addr_string() (msergeant).

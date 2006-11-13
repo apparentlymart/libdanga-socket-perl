@@ -100,7 +100,7 @@ use Time::HiRes ();
 my $opt_bsd_resource = eval "use BSD::Resource; 1;";
 
 use vars qw{$VERSION};
-$VERSION = "1.53";
+$VERSION = "1.54";
 
 use warnings;
 no  warnings qw(deprecated);
@@ -1118,8 +1118,11 @@ sub read {
         }
     }
 
-    # max 5MB, or perl quits(!!)
-    my $req_bytes = $bytes > 5242880 ? 5242880 : $bytes;
+    # if this is too high, perl quits(!!).  reports on mailing lists
+    # don't seem to point to a universal answer.  5MB worked for some,
+    # crashed for others.  1MB works for more people.  let's go with 1MB
+    # for now.  :/
+    my $req_bytes = $bytes > 1048576 ? 1048576 : $bytes;
 
     my $res = sysread($sock, $buf, $req_bytes, 0);
     DebugLevel >= 2 && $self->debugmsg("sysread = %d; \$! = %d", $res, $!);
