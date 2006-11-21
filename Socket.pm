@@ -185,6 +185,11 @@ sub Reset {
     %PLCMap = ();
 }
 
+# Reset the initialized poller, perhaps this should be part of sub Reset.
+sub ResetPoller {
+    $DoneInit = 0;
+}
+
 =head2 C<< CLASS->HaveEpoll() >>
 
 Returns a true value if this class will use IO::Epoll for async IO.
