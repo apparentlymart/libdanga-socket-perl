@@ -183,10 +183,6 @@ sub Reset {
 
     $PostLoopCallback = undef;
     %PLCMap = ();
-}
-
-# Reset the initialized poller, perhaps this should be part of sub Reset.
-sub ResetPoller {
     $DoneInit = 0;
 }
 
