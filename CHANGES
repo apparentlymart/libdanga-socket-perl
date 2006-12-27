@@ -1,3 +1,8 @@
+1.56
+   -- Reset method _still_ wasn't resetting enough.  had to reset the
+      EventLoop method as well, so _InitPoller would get called and reset
+      stuff.
+
 1.55
    -- Reset method wasn't resetting enough.
 

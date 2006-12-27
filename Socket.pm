@@ -100,7 +100,7 @@ use Time::HiRes ();
 my $opt_bsd_resource = eval "use BSD::Resource; 1;";
 
 use vars qw{$VERSION};
-$VERSION = "1.55";
+$VERSION = "1.56";
 
 use warnings;
 no  warnings qw(deprecated);
@@ -184,6 +184,8 @@ sub Reset {
     $PostLoopCallback = undef;
     %PLCMap = ();
     $DoneInit = 0;
+
+    *EventLoop = *FirstTimeEventLoop;
 }
 
 =head2 C<< CLASS->HaveEpoll() >>
@@ -377,7 +379,7 @@ Start processing IO events. In most daemon programs this never exits. See
 C<PostLoopCallback> below for how to exit the loop.
 
 =cut
-sub EventLoop {
+sub FirstTimeEventLoop {
     my $class = shift;
 
     _InitPoller();
