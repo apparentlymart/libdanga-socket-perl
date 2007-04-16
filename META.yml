@@ -1,9 +1,8 @@
 # http://module-build.sourceforge.net/META-spec.html
 #XXXXXXX This is a prototype!!!  It will change in the future!!! XXXXX#
 name:         Danga-Socket
-version:      1.56
+version:      1.57
 version_from: Socket.pm
-license: perl
 installdirs:  site
 requires:
     fields:                        0

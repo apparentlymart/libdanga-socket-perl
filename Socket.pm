@@ -100,7 +100,7 @@ use Time::HiRes ();
 my $opt_bsd_resource = eval "use BSD::Resource; 1;";
 
 use vars qw{$VERSION};
-$VERSION = "1.56";
+$VERSION = "1.57";
 
 use warnings;
 no  warnings qw(deprecated);
@@ -823,8 +823,11 @@ sub tcp_cork {
             # we're not closed already
             warn "setsockopt: $!";
             $self->close('tcp_cork_failed');
-        } elsif ($! == ENOPROTOOPT) {
+        } elsif ($! == ENOPROTOOPT || $!{ENOTSOCK} || $!{EOPNOTSUPP}) {
             # TCP implementation doesn't support corking, so just ignore it
+            # or we're trying to tcp-cork a non-socket (like a socketpair pipe
+            # which is acting like a socket, which Perlbal does for child
+            # processes acting like inetd-like web servers)
         } else {
             # some other error; we should never hit here, but if we do, die
             die "setsockopt: $!";

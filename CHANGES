@@ -1,3 +1,8 @@
+1.57
+   -- Make tcp_cork be a no-op (rather than exploding) when operating on
+      a fd that isn't a network socket (like a local pipe, which doesn't do
+      TCP).
+
 1.56
    -- Reset method _still_ wasn't resetting enough.  had to reset the
       EventLoop method as well, so _InitPoller would get called and reset
