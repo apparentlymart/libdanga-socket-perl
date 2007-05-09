@@ -13,7 +13,7 @@ use ExtUtils::MakeMaker;
 
 WriteMakefile(
     NAME                    => 'Danga::Socket',
-    VERSION_FROM            => 'Socket.pm', # finds $VERSION
+    VERSION_FROM            => 'lib/Danga/Socket.pm',
     AUTHOR                  => 'Brad Fitzpatrick <brad@danga.com>',
     ABSTRACT                => 'Async socket class',
     PREREQ_PM               => {
@@ -24,13 +24,6 @@ WriteMakefile(
         'Test::More'    => 0,
         'Time::HiRes'   => 0,
         'Sys::Syscall'  => 0,
-    },
-    dist                    => {
-        CI                      => "cvs commit",
-        RCS_LABEL               => 'cvs tag RELEASE_$(VERSION_SYM)',
-        SUFFIX                  => ".gz",
-        DIST_DEFAULT            => 'all tardist',
-        COMPRESS                => "gzip",
     },
 
 );
