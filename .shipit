@@ -1,3 +1,2 @@
-steps = FindVersion, ChangeVersion, CheckChangeLog, DistTest, Commit, Tag, MakeDist, UploadCPAN, AddToSVNDir
+steps = FindVersion, ChangeVersion, CheckChangeLog, DistTest, Commit, Tag, MakeDist, UploadCPAN
 svn.tagpattern = %v
-AddToSVNDir.dir = /home/lj/cvs/web-danga/dist/Danga-Socket
