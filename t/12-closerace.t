@@ -63,7 +63,6 @@ sub new {
 
     my $self = fields::new($class);
     $self->SUPER::new($sock);       # init base fields
-    bless $self, ref $class || $class;
     $self->watch_read(1);
     $self->{state} = "init";
     $self->{got}   = "";

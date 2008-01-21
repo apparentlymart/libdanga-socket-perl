@@ -92,7 +92,6 @@ sub new {
 
     my $self = fields::new($class);
     $self->SUPER::new($sock);       # init base fields
-    bless $self, ref $class || $class;
     $self->watch_read(1);
     my $peer_str  = $self->peer_addr_string();
     my $local_str = $self->local_addr_string();
@@ -163,7 +162,6 @@ sub new {
 
     my $self = fields::new($class);
     $self->SUPER::new($sock);
-    bless $self, ref $class || $class;
 
     $self->{'connected'} = 0;
 

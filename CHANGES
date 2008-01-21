@@ -1,5 +1,9 @@
    -- restructure tree to be more "normal", with lib/ directory
 
+1.58
+   -- Remove unnecessary bless() calls in tests (5.10 compatibility)
+      (msergeant)
+
 1.57
    -- Make tcp_cork be a no-op (rather than exploding) when operating on
       a fd that isn't a network socket (like a local pipe, which doesn't do
