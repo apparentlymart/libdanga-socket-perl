@@ -1063,6 +1063,8 @@ sub write {
                                                $written, $self->{fd}, $need_queue);
             $self->{write_buf_offset} = 0;
 
+            $self->watch_write(0) if $self->{event_watch} & POLLOUT;
+
             # this was our only write, so we can return immediately
             # since we avoided incrementing the buffer size or
             # putting it in the buffer.  we also know there
