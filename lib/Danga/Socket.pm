@@ -185,6 +185,9 @@ sub Reset {
     %PLCMap = ();
     $DoneInit = 0;
 
+    POSIX::close($Epoll)  if defined $Epoll  && $Epoll  >= 0;
+    POSIX::close($KQueue) if defined $KQueue && $KQueue >= 0;
+    
     *EventLoop = *FirstTimeEventLoop;
 }
 

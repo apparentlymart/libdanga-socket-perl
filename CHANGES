@@ -1,8 +1,8 @@
-   -- restructure tree to be more "normal", with lib/ directory
 
 1.59
    -- Don't keep watching for write after all writing is completed OK
       (Dave Leadbeater)
+   -- Reset() now closes the Epoll or KQueue socket (Radu Greab)
 
 1.58
    -- Remove unnecessary bless() calls in tests (5.10 compatibility)
