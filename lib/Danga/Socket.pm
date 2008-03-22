@@ -1068,9 +1068,9 @@ sub write {
                                                $written, $self->{fd}, $need_queue);
             $self->{write_buf_offset} = 0;
 
-            if($self->{write_set_watch}) {
-              $self->watch_write(0);
-              $self->{write_set_watch} = 0;
+            if ($self->{write_set_watch}) {
+                $self->watch_write(0);
+                $self->{write_set_watch} = 0;
             }
 
             # this was our only write, so we can return immediately
@@ -1237,9 +1237,9 @@ sub watch_write {
     $event &= ~POLLOUT if ! $val;
     $event |=  POLLOUT if   $val;
 
-    if($val && caller ne __PACKAGE__) {
-      # A subclass registered interest, it's now responsible for this.
-      $self->{write_set_watch} = 0;
+    if ($val && caller ne __PACKAGE__) {
+        # A subclass registered interest, it's now responsible for this.
+        $self->{write_set_watch} = 0;
     }
 
     # If it changed, set it
