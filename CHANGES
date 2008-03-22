@@ -1,4 +1,8 @@
 
+1.60
+    -- Keep watching for write after all writing is completed if user
+       specifically asked to watch_write (D. Leadbeater)
+
 1.59
    -- Don't keep watching for write after all writing is completed OK
       (Dave Leadbeater)

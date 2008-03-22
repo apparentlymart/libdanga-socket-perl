@@ -112,6 +112,7 @@ use fields ('sock',              # underlying socket
             'write_buf',         # arrayref of scalars, scalarrefs, or coderefs to write
             'write_buf_offset',  # offset into first array of write_buf to start writing at
             'write_buf_size',    # total length of data in all write_buf items
+            'write_set_watch',   # bool: true if we internally set watch_write rather than by a subclass
             'read_push_back',    # arrayref of "pushed-back" read data the application didn't want
             'closed',            # bool: socket is closed
             'corked',            # bool: socket is corked
@@ -1039,6 +1040,7 @@ sub write {
                     push @{$self->{write_buf}}, $bref;
                     $self->{write_buf_size} += $len;
                 }
+                $self->{write_set_watch} = 1 unless $self->{event_watch} & POLLOUT;
                 $self->watch_write(1);
                 return 0;
             } elsif ($! == ECONNRESET) {
@@ -1066,7 +1068,10 @@ sub write {
                                                $written, $self->{fd}, $need_queue);
             $self->{write_buf_offset} = 0;
 
-            $self->watch_write(0) if $self->{event_watch} & POLLOUT;
+            if($self->{write_set_watch}) {
+              $self->watch_write(0);
+              $self->{write_set_watch} = 0;
+            }
 
             # this was our only write, so we can return immediately
             # since we avoided incrementing the buffer size or
@@ -1084,6 +1089,7 @@ sub write {
 
 sub on_incomplete_write {
     my Danga::Socket $self = shift;
+    $self->{write_set_watch} = 1 unless $self->{event_watch} & POLLOUT;
     $self->watch_write(1);
 }
 
@@ -1230,6 +1236,11 @@ sub watch_write {
 
     $event &= ~POLLOUT if ! $val;
     $event |=  POLLOUT if   $val;
+
+    if($val && caller ne __PACKAGE__) {
+      # A subclass registered interest, it's now responsible for this.
+      $self->{write_set_watch} = 0;
+    }
 
     # If it changed, set it
     if ($event != $self->{event_watch}) {
