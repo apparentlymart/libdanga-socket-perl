@@ -100,7 +100,7 @@ use Time::HiRes ();
 my $opt_bsd_resource = eval "use BSD::Resource; 1;";
 
 use vars qw{$VERSION};
-$VERSION = "1.59";
+$VERSION = "1.61";
 
 use warnings;
 no  warnings qw(deprecated);

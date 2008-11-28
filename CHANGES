@@ -1,3 +1,4 @@
+1.61 (2008-11-27)
     -- IPv6 support.  At least enough to get Perlbal going.
        Let me know if this is done incorrectly or non-portably!
        (Brad Fitzpatrick; brad@danga.com).
