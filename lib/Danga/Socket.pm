@@ -117,6 +117,7 @@ use fields ('sock',              # underlying socket
             'closed',            # bool: socket is closed
             'corked',            # bool: socket is corked
             'event_watch',       # bitmask of events the client is interested in (POLLIN,OUT,etc.)
+            'peer_v6',           # bool: cached; if peer is an IPv6 address
             'peer_ip',           # cached stringified IP address of $sock
             'peer_port',         # cached port number of $sock
             'local_ip',          # cached stringified IP address of local end of $sock
@@ -1304,7 +1305,11 @@ sub peer_ip_string {
     return _undef("peer_ip_string undef: getpeername") unless $pn;
 
     my ($port, $iaddr) = eval {
-        Socket::sockaddr_in($pn);
+        if (length($pn) >= 28) {
+            return Socket6::unpack_sockaddr_in6($pn);
+        } else {
+            return Socket::sockaddr_in($pn);
+        }
     };
 
     if ($@) {
@@ -1314,7 +1319,13 @@ sub peer_ip_string {
 
     $self->{peer_port} = $port;
 
-    return $self->{peer_ip} = Socket::inet_ntoa($iaddr);
+    if (length($iaddr) == 4) {
+        return $self->{peer_ip} = Socket::inet_ntoa($iaddr);
+    } else {
+        $self->{peer_v6} = 1;
+        return $self->{peer_ip} = Socket6::inet_ntop(Socket6::AF_INET6(),
+                                                     $iaddr);
+    }
 }
 
 =head2 C<< $obj->peer_addr_string() >>
@@ -1325,8 +1336,11 @@ object in form "ip:port"
 =cut
 sub peer_addr_string {
     my Danga::Socket $self = shift;
-    my $ip = $self->peer_ip_string;
-    return $ip ? "$ip:$self->{peer_port}" : undef;
+    my $ip = $self->peer_ip_string
+        or return undef;
+    return $self->{peer_v6} ?
+        "[$ip]:$self->{peer_port}" :
+        "$ip:$self->{peer_port}";
 }
 
 =head2 C<< $obj->local_ip_string() >>
