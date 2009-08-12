@@ -495,7 +495,7 @@ sub _wrap_watcher_cb {
     my ($cb) = @_;
 
     return sub {
-        $cb->(@_);
+        my $ret = $cb->(@_);
         $IdleWatcher = AnyEvent->idle(
             cb => sub {
                 my $keep_running = PostEventLoop();
@@ -503,6 +503,7 @@ sub _wrap_watcher_cb {
                 $MainLoopCondVar->send unless $keep_running;
             },
         );
+        return $ret;
     };
 }
 
@@ -544,19 +545,9 @@ sub new {
 
     $self->{event_watch} = POLLERR|POLLHUP|POLLNVAL;
 
-    _InitPoller();
-
-    if ($HaveEpoll) {
-        epoll_ctl($Epoll, EPOLL_CTL_ADD, $fd, $self->{event_watch})
-            and die "couldn't add epoll watch for $fd\n";
-    }
-    elsif ($HaveKQueue) {
-        # Add them to the queue but disabled for now
-        $KQueue->EV_SET($fd, IO::KQueue::EVFILT_READ(),
-                        IO::KQueue::EV_ADD() | IO::KQueue::EV_DISABLE());
-        $KQueue->EV_SET($fd, IO::KQueue::EVFILT_WRITE(),
-                        IO::KQueue::EV_ADD() | IO::KQueue::EV_DISABLE());
-    }
+    # Create the slots where the watchers will go if the caller
+    # decides to watch_read or watch_write.
+    $FdWatchers{$fd} = [ undef, undef ];
 
     Carp::cluck("Danga::Socket::new blowing away existing descriptor map for fd=$fd ($DescriptorMap{$fd})")
         if $DescriptorMap{$fd};
@@ -692,6 +683,7 @@ sub _cleanup {
     # to get alerts for it if it becomes writable/readable/etc.
     delete $PushBackSet{$self->{fd}};
     delete $PLCMap{$self->{fd}};
+    delete $FdWatchers{$self->{fd}};
 
     # we explicitly don't delete from DescriptorMap here until we
     # actually close the socket, as we might be in the middle of
@@ -976,23 +968,19 @@ sub watch_read {
     return if $self->{closed} || !$self->{sock};
 
     my $val = shift;
-    my $event = $self->{event_watch};
-
-    $event &= ~POLLIN if ! $val;
-    $event |=  POLLIN if   $val;
-
-    # If it changed, set it
-    if ($event != $self->{event_watch}) {
-        if ($HaveKQueue) {
-            $KQueue->EV_SET($self->{fd}, IO::KQueue::EVFILT_READ(),
-                            $val ? IO::KQueue::EV_ENABLE() : IO::KQueue::EV_DISABLE());
-        }
-        elsif ($HaveEpoll) {
-            epoll_ctl($Epoll, EPOLL_CTL_MOD, $self->{fd}, $event)
-                and $self->dump_error("couldn't modify epoll settings for $self->{fd} " .
-                                      "from $self->{event_watch} -> $event: $! (" . ($!+0) . ")");
-        }
-        $self->{event_watch} = $event;
+    my $fd = fileno($self->{sock});
+    my $watchers = $FdWatchers{$fd};
+    if ($val) {
+        $watchers->[0] = AnyEvent->io(
+            fh => $fd,
+            poll => 'r',
+            cb => _wrap_watcher_cb(sub {
+                $self->event_read() unless $self->{closed};
+            }),
+        );
+    }
+    else {
+        $watchers->[0] = undef;
     }
 }
 
@@ -1006,28 +994,25 @@ sub watch_write {
     return if $self->{closed} || !$self->{sock};
 
     my $val = shift;
-    my $event = $self->{event_watch};
-
-    $event &= ~POLLOUT if ! $val;
-    $event |=  POLLOUT if   $val;
+    my $fd = fileno($self->{sock});
 
     if ($val && caller ne __PACKAGE__) {
         # A subclass registered interest, it's now responsible for this.
         $self->{write_set_watch} = 0;
     }
 
-    # If it changed, set it
-    if ($event != $self->{event_watch}) {
-        if ($HaveKQueue) {
-            $KQueue->EV_SET($self->{fd}, IO::KQueue::EVFILT_WRITE(),
-                            $val ? IO::KQueue::EV_ENABLE() : IO::KQueue::EV_DISABLE());
-        }
-        elsif ($HaveEpoll) {
-            epoll_ctl($Epoll, EPOLL_CTL_MOD, $self->{fd}, $event)
-                and $self->dump_error("couldn't modify epoll settings for $self->{fd} " .
-                                      "from $self->{event_watch} -> $event: $! (" . ($!+0) . ")");
-        }
-        $self->{event_watch} = $event;
+    my $watchers = $FdWatchers{$fd};
+    if ($val) {
+        $watchers->[1] = AnyEvent->io(
+            fh => $fd,
+            poll => 'w',
+            cb => _wrap_watcher_cb(sub {
+                $self->event_write() unless $self->{closed};
+            }),
+        );
+    }
+    else {
+        $watchers->[1] = undef;
     }
 }
 
