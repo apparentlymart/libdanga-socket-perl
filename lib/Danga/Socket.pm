@@ -372,6 +372,28 @@ C<PostLoopCallback> below for how to exit the loop.
 sub EventLoop {
     my $class = shift;
 
+    my $timeout_watcher;
+    if ($LoopTimeout) {
+        my $timeout_handler = sub {
+            $MainLoopCondVar->send() if $MainLoopCondVar;
+        };
+
+        if ($LoopTimeout == -1) {
+            # Poll and then return as soon as we go idle.
+            $timeout_watcher = AnyEvent->idle(
+                cb => $timeout_handler,
+            );
+        }
+        else {
+            # Return after the given amount of milliseconds (which we must of, of course, convert to seconds)
+            my $timeout = $LoopTimeout * 0.001;
+            $timeout_watcher = AnyEvent->timer(
+                cb => $timeout_handler,
+                after => $timeout,
+            );
+        }
+    }
+
     $MainLoopCondVar = AnyEvent->condvar;
     $MainLoopCondVar->recv(); # Blocks until $MainLoopCondVar->send is called
     $MainLoopCondVar = undef;
