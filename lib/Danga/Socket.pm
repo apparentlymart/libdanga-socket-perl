@@ -147,16 +147,18 @@ our (
      %FdWatchers,                # fd (num) -> [ AnyEvent read watcher, AnyEvent write watcher ]
      %DescriptorMap,             # fd (num) -> Danga::Socket object that owns it
      %OtherFds,                  # fd (num) -> sub to run when that fd is ready to read or write
+     %PushBackSet,               # fd (num) -> Danga::Socket (fds with pushed back read data)
+     $PostLoopCallback,          # subref to call at the end of each loop, if defined (global)
+     %PLCMap,                    # fd (num) -> PostLoopCallback (per-object)
+     $IdleWatcher,               # an AnyEvent idle watcher that'll run PostEventLoop and then delete itself.
+     $MainLoopCondVar,           # When EventLoop is running this contains the AnyEvent condvar that
+                                 # will cause the main loop to exit if you call ->send() on it.
 
     # Legacy bits that still need porting or eradicating
      $HaveEpoll, $HaveKQueue,    # no longer used
-     %PushBackSet,               # fd (num) -> Danga::Socket (fds with pushed back read data)
      $Epoll,                     # Global epoll fd (for epoll mode only)
      $KQueue,                    # Global kqueue fd (for kqueue mode only)
      @ToClose,                   # sockets to close when event loop is done
-
-     $PostLoopCallback,          # subref to call at the end of each loop, if defined (global)
-     %PLCMap,                    # fd (num) -> PostLoopCallback (per-object)
 
      $LoopTimeout,               # timeout of event loop in milliseconds
      $DoProfile,                 # if on, enable profiling
@@ -283,7 +285,7 @@ sub AddOtherFds {
             AnyEvent->io(
                 fh => $fd,
                 poll => $mode,
-                cb => $coderef,
+                cb => _wrap_watcher_cb($coderef),
             )
         } qw(r w) ];
     }
@@ -345,7 +347,7 @@ sub AddTimer {
     # get collected.
     $Timers{$key} = AnyEvent->timer(
         after => $secs,
-        cb => $cb,
+        cb => _wrap_watcher_cb($cb),
     );
 
     return bless $timer, 'Danga::Socket::Timer';
@@ -375,15 +377,9 @@ C<PostLoopCallback> below for how to exit the loop.
 sub EventLoop {
     my $class = shift;
 
-    my $cv = AnyEvent->condvar;
-
-    # Set up an idle watcher to call the post loop handler
-    my $idle_watcher = AnyEvent->idle(cb => sub {
-        my $should_continue = $class->PostEventLoop();
-        $cv->send() unless $should_continue;
-    });
-
-    $cv->recv(); # Blocks until we call $cv->send above
+    $MainLoopCondVar = AnyEvent->condvar;
+    $MainLoopCondVar->recv(); # Blocks until $MainLoopCondVar->send is called
+    $MainLoopCondVar = undef;
 }
 
 ## profiling-related data/functions
@@ -440,7 +436,74 @@ sub SetPostLoopCallback {
 # for pushed-back data, and close pending connections.  returns 1
 # if event loop should continue, or 0 to shut it all down.
 sub PostEventLoop {
-    return 1;
+    # fire read events for objects with pushed-back read data
+    my $loop = 1;
+    while ($loop) {
+        $loop = 0;
+        foreach my $fd (keys %PushBackSet) {
+            my Danga::Socket $pob = $PushBackSet{$fd};
+
+            # a previous event_read invocation could've closed a
+            # connection that we already evaluated in "keys
+            # %PushBackSet", so skip ones that seem to have
+            # disappeared.  this is expected.
+            next unless $pob;
+
+            die "ASSERT: the $pob socket has no read_push_back" unless @{$pob->{read_push_back}};
+            next unless (! $pob->{closed} &&
+                         $pob->{event_watch} & POLLIN);
+            $loop = 1;
+            $pob->event_read;
+        }
+    }
+
+    # now we can close sockets that wanted to close during our event processing.
+    # (we didn't want to close them during the loop, as we didn't want fd numbers
+    #  being reused and confused during the event loop)
+    while (my $sock = shift @ToClose) {
+        my $fd = fileno($sock);
+
+        # close the socket.  (not a Danga::Socket close)
+        $sock->close;
+
+        # and now we can finally remove the fd from the map.  see
+        # comment above in _cleanup.
+        delete $DescriptorMap{$fd};
+    }
+
+
+    # by default we keep running, unless a postloop callback (either per-object
+    # or global) cancels it
+    my $keep_running = 1;
+
+    # per-object post-loop-callbacks
+    for my $plc (values %PLCMap) {
+        $keep_running &&= $plc->(\%DescriptorMap, \%OtherFds);
+    }
+
+    # now we're at the very end, call callback if defined
+    if (defined $PostLoopCallback) {
+        $keep_running &&= $PostLoopCallback->(\%DescriptorMap, \%OtherFds);
+    }
+
+    return $keep_running;
+}
+
+# Internal method to decorate a watcher callback with extra code to install
+# the IdleWatcher necessary to run PostEventLoop.
+sub _wrap_watcher_cb {
+    my ($cb) = @_;
+
+    return sub {
+        $cb->(@_);
+        $IdleWatcher = AnyEvent->idle(
+            cb => sub {
+                my $keep_running = PostEventLoop();
+                $IdleWatcher = undef; # Free this watcher
+                $MainLoopCondVar->send unless $keep_running;
+            },
+        );
+    };
 }
 
 #####################################################################
