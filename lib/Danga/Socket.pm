@@ -96,6 +96,7 @@ use strict;
 use bytes;
 use POSIX ();
 use Time::HiRes ();
+use AnyEvent;
 
 my $opt_bsd_resource = eval "use BSD::Resource; 1;";
 
@@ -142,8 +143,7 @@ use constant POLLNVAL      => 32;
 our $HAVE_KQUEUE = eval { require IO::KQueue; 1 };
 
 our (
-     $HaveEpoll,                 # Flag -- is epoll available?  initially undefined.
-     $HaveKQueue,
+     $HaveEpoll, $HaveKQueue,    # no longer used
      %DescriptorMap,             # fd (num) -> Danga::Socket object
      %PushBackSet,               # fd (num) -> Danga::Socket (fds with pushed back read data)
      $Epoll,                     # Global epoll fd (for epoll mode only)
@@ -159,7 +159,7 @@ our (
      $DoProfile,                 # if on, enable profiling
      %Profiling,                 # what => [ utime, stime, calls ]
      $DoneInit,                  # if we've done the one-time module init yet
-     @Timers,                    # timers
+     %Timers,                    # timers
      );
 
 Reset();
@@ -174,23 +174,6 @@ Reset all state
 
 =cut
 sub Reset {
-    %DescriptorMap = ();
-    %PushBackSet = ();
-    @ToClose = ();
-    %OtherFds = ();
-    $LoopTimeout = -1;  # no timeout by default
-    $DoProfile = 0;
-    %Profiling = ();
-    @Timers = ();
-
-    $PostLoopCallback = undef;
-    %PLCMap = ();
-    $DoneInit = 0;
-
-    POSIX::close($Epoll)  if defined $Epoll  && $Epoll  >= 0;
-    POSIX::close($KQueue) if defined $KQueue && $KQueue >= 0;
-    
-    *EventLoop = *FirstTimeEventLoop;
 }
 
 =head2 C<< CLASS->HaveEpoll() >>
@@ -199,8 +182,7 @@ Returns a true value if this class will use IO::Epoll for async IO.
 
 =cut
 sub HaveEpoll {
-    _InitPoller();
-    return $HaveEpoll;
+    return 1;
 }
 
 =head2 C<< CLASS->WatchedSockets() >>
@@ -210,7 +192,6 @@ poll object.
 
 =cut
 sub WatchedSockets {
-    return scalar keys %DescriptorMap;
 }
 *watched_sockets = *WatchedSockets;
 
@@ -263,9 +244,6 @@ the registered Danga::Socket objects.
 
 =cut
 sub OtherFds {
-    my $class = shift;
-    if ( @_ ) { %OtherFds = @_ }
-    return wantarray ? %OtherFds : \%OtherFds;
 }
 
 =head2 C<< CLASS->AddOtherFds( [%fdmap] ) >>
@@ -274,9 +252,6 @@ Add fds to the OtherFds hash for processing.
 
 =cut
 sub AddOtherFds {
-    my $class = shift;
-    %OtherFds = ( %OtherFds, @_ ); # FIXME investigate what happens on dupe fds
-    return wantarray ? %OtherFds : \%OtherFds;
 }
 
 =head2 C<< CLASS->SetLoopTimeout( $timeout ) >>
@@ -315,27 +290,30 @@ sub AddTimer {
     my $class = shift;
     my ($secs, $coderef) = @_;
 
-    my $fire_time = Time::HiRes::time() + $secs;
+    my $timer = [ undef ];
 
-    my $timer = bless [$fire_time, $coderef], "Danga::Socket::Timer";
+    my $key = "$timer"; # Just stringify the timer array to get our hash key
 
-    if (!@Timers || $fire_time >= $Timers[-1][0]) {
-        push @Timers, $timer;
-        return $timer;
-    }
+    my $cancel = sub {
+        $Timers{$key} = undef;
+    };
 
-    # Now, where do we insert?  (NOTE: this appears slow, algorithm-wise,
-    # but it was compared against calendar queues, heaps, naive push/sort,
-    # and a bunch of other versions, and found to be fastest with a large
-    # variety of datasets.)
-    for (my $i = 0; $i < @Timers; $i++) {
-        if ($Timers[$i][0] > $fire_time) {
-            splice(@Timers, $i, 0, $timer);
-            return $timer;
-        }
-    }
+    my $cb = sub {
+        $coderef->();
+        $cancel->();
+    };
 
-    die "Shouldn't get here.";
+    $timer->[0] = $cancel;
+
+    # We save the watcher in $Timers to keep it alive until it runs,
+    # or until $cancel above overwrites it with undef to cause it to
+    # get collected.
+    $Timers{$key} = AnyEvent->timer(
+        after => $secs,
+        cb => $cb,
+    );
+
+    return bless $timer, 'Danga::Socket::Timer';
 }
 
 =head2 C<< CLASS->DescriptorMap() >>
@@ -352,50 +330,25 @@ sub DescriptorMap {
 *descriptor_map = *DescriptorMap;
 *get_sock_ref = *DescriptorMap;
 
-sub _InitPoller
-{
-    return if $DoneInit;
-    $DoneInit = 1;
-
-    if ($HAVE_KQUEUE) {
-        $KQueue = IO::KQueue->new();
-        $HaveKQueue = $KQueue >= 0;
-        if ($HaveKQueue) {
-            *EventLoop = *KQueueEventLoop;
-        }
-    }
-    elsif (Sys::Syscall::epoll_defined()) {
-        $Epoll = eval { epoll_create(1024); };
-        $HaveEpoll = defined $Epoll && $Epoll >= 0;
-        if ($HaveEpoll) {
-            *EventLoop = *EpollEventLoop;
-        }
-    }
-
-    if (!$HaveEpoll && !$HaveKQueue) {
-        require IO::Poll;
-        *EventLoop = *PollEventLoop;
-    }
-}
-
 =head2 C<< CLASS->EventLoop() >>
 
 Start processing IO events. In most daemon programs this never exits. See
 C<PostLoopCallback> below for how to exit the loop.
 
 =cut
-sub FirstTimeEventLoop {
+
+sub EventLoop {
     my $class = shift;
 
-    _InitPoller();
+    my $cv = AnyEvent->condvar;
 
-    if ($HaveEpoll) {
-        EpollEventLoop($class);
-    } elsif ($HaveKQueue) {
-        KQueueEventLoop($class);
-    } else {
-        PollEventLoop($class);
-    }
+    # Set up an idle watcher to call the post loop handler
+    my $idle_watcher = AnyEvent->idle(cb => sub {
+        my $should_continue = $class->PostEventLoop();
+        $cv->send() unless $should_continue;
+    });
+
+    $cv->recv(); # Blocks until we call $cv->send above
 }
 
 ## profiling-related data/functions
@@ -418,234 +371,6 @@ sub _post_profile {
         $Profiling{$k}->[1] += $stime;
         $Profiling{$k}->[2]++;
     }
-}
-
-# runs timers and returns milliseconds for next one, or next event loop
-sub RunTimers {
-    return $LoopTimeout unless @Timers;
-
-    my $now = Time::HiRes::time();
-
-    # Run expired timers
-    while (@Timers && $Timers[0][0] <= $now) {
-        my $to_run = shift(@Timers);
-        $to_run->[1]->($now) if $to_run->[1];
-    }
-
-    return $LoopTimeout unless @Timers;
-
-    # convert time to an even number of milliseconds, adding 1
-    # extra, otherwise floating point fun can occur and we'll
-    # call RunTimers like 20-30 times, each returning a timeout
-    # of 0.0000212 seconds
-    my $timeout = int(($Timers[0][0] - $now) * 1000) + 1;
-
-    # -1 is an infinite timeout, so prefer a real timeout
-    return $timeout     if $LoopTimeout == -1;
-
-    # otherwise pick the lower of our regular timeout and time until
-    # the next timer
-    return $LoopTimeout if $LoopTimeout < $timeout;
-    return $timeout;
-}
-
-### The epoll-based event loop. Gets installed as EventLoop if IO::Epoll loads
-### okay.
-sub EpollEventLoop {
-    my $class = shift;
-
-    foreach my $fd ( keys %OtherFds ) {
-        if (epoll_ctl($Epoll, EPOLL_CTL_ADD, $fd, EPOLLIN) == -1) {
-            warn "epoll_ctl(): failure adding fd=$fd; $! (", $!+0, ")\n";
-        }
-    }
-
-    while (1) {
-        my @events;
-        my $i;
-        my $timeout = RunTimers();
-
-        # get up to 1000 events
-        my $evcount = epoll_wait($Epoll, 1000, $timeout, \@events);
-      EVENT:
-        for ($i=0; $i<$evcount; $i++) {
-            my $ev = $events[$i];
-
-            # it's possible epoll_wait returned many events, including some at the end
-            # that ones in the front triggered unregister-interest actions.  if we
-            # can't find the %sock entry, it's because we're no longer interested
-            # in that event.
-            my Danga::Socket $pob = $DescriptorMap{$ev->[0]};
-            my $code;
-            my $state = $ev->[1];
-
-            # if we didn't find a Perlbal::Socket subclass for that fd, try other
-            # pseudo-registered (above) fds.
-            if (! $pob) {
-                if (my $code = $OtherFds{$ev->[0]}) {
-                    $code->($state);
-                } else {
-                    my $fd = $ev->[0];
-                    warn "epoll() returned fd $fd w/ state $state for which we have no mapping.  removing.\n";
-                    POSIX::close($fd);
-                    epoll_ctl($Epoll, EPOLL_CTL_DEL, $fd, 0);
-                }
-                next;
-            }
-
-            DebugLevel >= 1 && $class->DebugMsg("Event: fd=%d (%s), state=%d \@ %s\n",
-                                                $ev->[0], ref($pob), $ev->[1], time);
-
-            if ($DoProfile) {
-                my $class = ref $pob;
-
-                # call profiling action on things that need to be done
-                if ($state & EPOLLIN && ! $pob->{closed}) {
-                    _pre_profile();
-                    $pob->event_read;
-                    _post_profile("$class-read");
-                }
-
-                if ($state & EPOLLOUT && ! $pob->{closed}) {
-                    _pre_profile();
-                    $pob->event_write;
-                    _post_profile("$class-write");
-                }
-
-                if ($state & (EPOLLERR|EPOLLHUP)) {
-                    if ($state & EPOLLERR && ! $pob->{closed}) {
-                        _pre_profile();
-                        $pob->event_err;
-                        _post_profile("$class-err");
-                    }
-                    if ($state & EPOLLHUP && ! $pob->{closed}) {
-                        _pre_profile();
-                        $pob->event_hup;
-                        _post_profile("$class-hup");
-                    }
-                }
-
-                next;
-            }
-
-            # standard non-profiling codepat
-            $pob->event_read   if $state & EPOLLIN && ! $pob->{closed};
-            $pob->event_write  if $state & EPOLLOUT && ! $pob->{closed};
-            if ($state & (EPOLLERR|EPOLLHUP)) {
-                $pob->event_err    if $state & EPOLLERR && ! $pob->{closed};
-                $pob->event_hup    if $state & EPOLLHUP && ! $pob->{closed};
-            }
-        }
-        return unless PostEventLoop();
-    }
-    exit 0;
-}
-
-### The fallback IO::Poll-based event loop. Gets installed as EventLoop if
-### IO::Epoll fails to load.
-sub PollEventLoop {
-    my $class = shift;
-
-    my Danga::Socket $pob;
-
-    while (1) {
-        my $timeout = RunTimers();
-
-        # the following sets up @poll as a series of ($poll,$event_mask)
-        # items, then uses IO::Poll::_poll, implemented in XS, which
-        # modifies the array in place with the even elements being
-        # replaced with the event masks that occured.
-        my @poll;
-        foreach my $fd ( keys %OtherFds ) {
-            push @poll, $fd, POLLIN;
-        }
-        while ( my ($fd, $sock) = each %DescriptorMap ) {
-            push @poll, $fd, $sock->{event_watch};
-        }
-
-        # if nothing to poll, either end immediately (if no timeout)
-        # or just keep calling the callback
-        unless (@poll) {
-            select undef, undef, undef, ($timeout / 1000);
-            return unless PostEventLoop();
-            next;
-        }
-
-        my $count = IO::Poll::_poll($timeout, @poll);
-        unless ($count) {
-            return unless PostEventLoop();
-            next;
-        }
-
-        # Fetch handles with read events
-        while (@poll) {
-            my ($fd, $state) = splice(@poll, 0, 2);
-            next unless $state;
-
-            $pob = $DescriptorMap{$fd};
-
-            if (!$pob) {
-                if (my $code = $OtherFds{$fd}) {
-                    $code->($state);
-                }
-                next;
-            }
-
-            $pob->event_read   if $state & POLLIN && ! $pob->{closed};
-            $pob->event_write  if $state & POLLOUT && ! $pob->{closed};
-            $pob->event_err    if $state & POLLERR && ! $pob->{closed};
-            $pob->event_hup    if $state & POLLHUP && ! $pob->{closed};
-        }
-
-        return unless PostEventLoop();
-    }
-
-    exit 0;
-}
-
-### The kqueue-based event loop. Gets installed as EventLoop if IO::KQueue works
-### okay.
-sub KQueueEventLoop {
-    my $class = shift;
-
-    foreach my $fd (keys %OtherFds) {
-        $KQueue->EV_SET($fd, IO::KQueue::EVFILT_READ(), IO::KQueue::EV_ADD());
-    }
-
-    while (1) {
-        my $timeout = RunTimers();
-        my @ret = $KQueue->kevent($timeout);
-
-        foreach my $kev (@ret) {
-            my ($fd, $filter, $flags, $fflags) = @$kev;
-            my Danga::Socket $pob = $DescriptorMap{$fd};
-            if (!$pob) {
-                if (my $code = $OtherFds{$fd}) {
-                    $code->($filter);
-                }  else {
-                    warn "kevent() returned fd $fd for which we have no mapping.  removing.\n";
-                    POSIX::close($fd); # close deletes the kevent entry
-                }
-                next;
-            }
-
-            DebugLevel >= 1 && $class->DebugMsg("Event: fd=%d (%s), flags=%d \@ %s\n",
-                                                        $fd, ref($pob), $flags, time);
-
-            $pob->event_read  if $filter == IO::KQueue::EVFILT_READ()  && !$pob->{closed};
-            $pob->event_write if $filter == IO::KQueue::EVFILT_WRITE() && !$pob->{closed};
-            if ($flags ==  IO::KQueue::EV_EOF() && !$pob->{closed}) {
-                if ($fflags) {
-                    $pob->event_err;
-                } else {
-                    $pob->event_hup;
-                }
-            }
-        }
-        return unless PostEventLoop();
-    }
-
-    exit(0);
 }
 
 =head2 C<< CLASS->SetPostLoopCallback( CODEREF ) >>
@@ -680,57 +405,7 @@ sub SetPostLoopCallback {
 # for pushed-back data, and close pending connections.  returns 1
 # if event loop should continue, or 0 to shut it all down.
 sub PostEventLoop {
-    # fire read events for objects with pushed-back read data
-    my $loop = 1;
-    while ($loop) {
-        $loop = 0;
-        foreach my $fd (keys %PushBackSet) {
-            my Danga::Socket $pob = $PushBackSet{$fd};
-
-            # a previous event_read invocation could've closed a
-            # connection that we already evaluated in "keys
-            # %PushBackSet", so skip ones that seem to have
-            # disappeared.  this is expected.
-            next unless $pob;
-
-            die "ASSERT: the $pob socket has no read_push_back" unless @{$pob->{read_push_back}};
-            next unless (! $pob->{closed} &&
-                         $pob->{event_watch} & POLLIN);
-            $loop = 1;
-            $pob->event_read;
-        }
-    }
-
-    # now we can close sockets that wanted to close during our event processing.
-    # (we didn't want to close them during the loop, as we didn't want fd numbers
-    #  being reused and confused during the event loop)
-    while (my $sock = shift @ToClose) {
-        my $fd = fileno($sock);
-
-        # close the socket.  (not a Danga::Socket close)
-        $sock->close;
-
-        # and now we can finally remove the fd from the map.  see
-        # comment above in _cleanup.
-        delete $DescriptorMap{$fd};
-    }
-
-
-    # by default we keep running, unless a postloop callback (either per-object
-    # or global) cancels it
-    my $keep_running = 1;
-
-    # per-object post-loop-callbacks
-    for my $plc (values %PLCMap) {
-        $keep_running &&= $plc->(\%DescriptorMap, \%OtherFds);
-    }
-
-    # now we're at the very end, call callback if defined
-    if (defined $PostLoopCallback) {
-        $keep_running &&= $PostLoopCallback->(\%DescriptorMap, \%OtherFds);
-    }
-
-    return $keep_running;
+    return 1;
 }
 
 #####################################################################
@@ -1400,9 +1075,9 @@ sub _undef {
 }
 
 package Danga::Socket::Timer;
-# [$abs_float_firetime, $coderef];
+# [$cancel_coderef];
 sub cancel {
-    $_[0][1] = undef;
+    $_[0][0]->();
 }
 
 =head1 AUTHORS
