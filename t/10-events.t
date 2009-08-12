@@ -55,12 +55,18 @@ ok(1, "finish");
 
 package Server;
 use base 'Danga::Socket';
+use vars qw($SERVER_PORT);
+
+BEGIN {
+    $SERVER_PORT = $ENV{DS_TEST_SERVER_PORT} || 60001;
+}
 
 sub new {
     my $class = shift;
+    print STDERR "Starting server on port $SERVER_PORT\n";
     my $ssock = IO::Socket::INET->new(Listen    => 5,
                                       LocalAddr => '127.0.0.1',
-                                      LocalPort => 60000,
+                                      LocalPort => $SERVER_PORT,
                                       Proto     => 'tcp',
                                       ReuseAddr => 1,
                                       );
@@ -158,7 +164,8 @@ sub new {
 
     die "can't create outgoing sock" unless $sock && defined fileno($sock);
     IO::Handle::blocking($sock, 0);
-    connect $sock, Socket::sockaddr_in(60000, Socket::inet_aton('127.0.0.1'));
+    print STDERR "Connecting to 127.0.0.1:$Server::SERVER_PORT\n";
+    connect $sock, Socket::sockaddr_in($Server::SERVER_PORT, Socket::inet_aton('127.0.0.1'));
 
     my $self = fields::new($class);
     $self->SUPER::new($sock);
@@ -179,3 +186,4 @@ sub event_write {
     $self->write("Hello!\n");
     $self->watch_write(0);
 }
+
