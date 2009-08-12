@@ -153,17 +153,12 @@ our (
      $IdleWatcher,               # an AnyEvent idle watcher that'll run PostEventLoop and then delete itself.
      $MainLoopCondVar,           # When EventLoop is running this contains the AnyEvent condvar that
                                  # will cause the main loop to exit if you call ->send() on it.
-
-    # Legacy bits that still need porting or eradicating
-     $HaveEpoll, $HaveKQueue,    # no longer used
-     $Epoll,                     # Global epoll fd (for epoll mode only)
-     $KQueue,                    # Global kqueue fd (for kqueue mode only)
      @ToClose,                   # sockets to close when event loop is done
-
-     $LoopTimeout,               # timeout of event loop in milliseconds
      $DoProfile,                 # if on, enable profiling
      %Profiling,                 # what => [ utime, stime, calls ]
      $DoneInit,                  # if we've done the one-time module init yet
+     $LoopTimeout,               # timeout of event loop in milliseconds
+
      );
 
 Reset();
@@ -669,15 +664,6 @@ sub _cleanup {
     # uncork so any final data gets sent.  only matters if the person closing
     # us forgot to do it, but we do it to be safe.
     $self->tcp_cork(0);
-
-    # if we're using epoll, we have to remove this from our epoll fd so we stop getting
-    # notifications about it
-    if ($HaveEpoll && $self->{fd}) {
-        if (epoll_ctl($Epoll, EPOLL_CTL_DEL, $self->{fd}, $self->{event_watch}) != 0) {
-            # dump_error prints a backtrace so we can try to figure out why this happened
-            $self->dump_error("epoll_ctl(): failure deleting fd=$self->{fd} during _cleanup(); $! (" . ($!+0) . ")");
-        }
-    }
 
     # now delete from mappings.  this fd no longer belongs to us, so we don't want
     # to get alerts for it if it becomes writable/readable/etc.
