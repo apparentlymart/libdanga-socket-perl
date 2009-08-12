@@ -143,14 +143,17 @@ use constant POLLNVAL      => 32;
 our $HAVE_KQUEUE = eval { require IO::KQueue; 1 };
 
 our (
+     %Timers,                    # timers
+     %FdWatchers,                # fd (num) -> [ AnyEvent read watcher, AnyEvent write watcher ]
+     %DescriptorMap,             # fd (num) -> Danga::Socket object that owns it
+     %OtherFds,                  # fd (num) -> sub to run when that fd is ready to read or write
+
+    # Legacy bits that still need porting or eradicating
      $HaveEpoll, $HaveKQueue,    # no longer used
-     %DescriptorMap,             # fd (num) -> Danga::Socket object
      %PushBackSet,               # fd (num) -> Danga::Socket (fds with pushed back read data)
      $Epoll,                     # Global epoll fd (for epoll mode only)
      $KQueue,                    # Global kqueue fd (for kqueue mode only)
      @ToClose,                   # sockets to close when event loop is done
-     %OtherFds,                  # A hash of "other" (non-Danga::Socket) file
-                                 # descriptors for the event loop to track.
 
      $PostLoopCallback,          # subref to call at the end of each loop, if defined (global)
      %PLCMap,                    # fd (num) -> PostLoopCallback (per-object)
@@ -159,7 +162,6 @@ our (
      $DoProfile,                 # if on, enable profiling
      %Profiling,                 # what => [ utime, stime, calls ]
      $DoneInit,                  # if we've done the one-time module init yet
-     %Timers,                    # timers
      );
 
 Reset();
@@ -174,6 +176,10 @@ Reset all state
 
 =cut
 sub Reset {
+    %Timers = ();
+    %FdWatchers = ();
+    %DescriptorMap = ();
+    %OtherFds = ();
 }
 
 =head2 C<< CLASS->HaveEpoll() >>
@@ -187,11 +193,11 @@ sub HaveEpoll {
 
 =head2 C<< CLASS->WatchedSockets() >>
 
-Returns the number of file descriptors which are registered with the global
-poll object.
+Returns the number of file descriptors for which we have watchers installed.
 
 =cut
 sub WatchedSockets {
+    return scalar(keys(%FdWatchers));
 }
 *watched_sockets = *WatchedSockets;
 
@@ -242,8 +248,20 @@ sub ToClose { return @ToClose; }
 Get/set the hash of file descriptors that need processing in parallel with
 the registered Danga::Socket objects.
 
+Callers must not modify the returned hash.
+
 =cut
 sub OtherFds {
+    my $class = shift;
+    if ( @_ ) {
+        # Clean up any watchers that we no longer need.
+        foreach my $fd (keys %OtherFds) {
+            delete $FdWatchers{$fd};
+        }
+        %OtherFds = ();
+        $class->AddOtherFds(@_);
+    }
+    return wantarray ? %OtherFds : \%OtherFds;
 }
 
 =head2 C<< CLASS->AddOtherFds( [%fdmap] ) >>
@@ -252,6 +270,23 @@ Add fds to the OtherFds hash for processing.
 
 =cut
 sub AddOtherFds {
+    my ($class, %fdmap) = @_;
+
+    foreach my $fd (keys %fdmap) {
+        my $coderef = $fdmap{$fd};
+        $OtherFds{$fd} = $coderef;
+
+        # The OtherFds interface uses the same callback for both read and write events,
+        # so create two AnyEvent watchers that differ only in their mode.
+        $FdWatchers{$fd} = [ map {
+            my $mode = $_;
+            AnyEvent->io(
+                fh => $fd,
+                poll => $mode,
+                cb => $coderef,
+            )
+        } qw(r w) ];
+    }
 }
 
 =head2 C<< CLASS->SetLoopTimeout( $timeout ) >>
@@ -295,7 +330,7 @@ sub AddTimer {
     my $key = "$timer"; # Just stringify the timer array to get our hash key
 
     my $cancel = sub {
-        $Timers{$key} = undef;
+        delete $Timers{$key};
     };
 
     my $cb = sub {
