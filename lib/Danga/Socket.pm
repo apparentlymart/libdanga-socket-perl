@@ -373,29 +373,24 @@ sub EventLoop {
     my $class = shift;
 
     my $timeout_watcher;
-    if ($LoopTimeout) {
-        my $timeout_handler = sub {
-            $MainLoopCondVar->send() if $MainLoopCondVar;
-        };
-
-        if ($LoopTimeout == -1) {
-            # Poll and then return as soon as we go idle.
-            $timeout_watcher = AnyEvent->idle(
-                cb => $timeout_handler,
-            );
-        }
-        else {
-            # Return after the given amount of milliseconds (which we must of, of course, convert to seconds)
-            my $timeout = $LoopTimeout * 0.001;
-            $timeout_watcher = AnyEvent->timer(
-                cb => $timeout_handler,
-                after => $timeout,
-            );
-        }
+    if ($LoopTimeout && $LoopTimeout != -1) {
+        # Return after the given amount of milliseconds (which we must of, of course, convert to seconds)
+        my $timeout = $LoopTimeout * 0.001;
+        $timeout_watcher = AnyEvent->timer(
+            cb => sub { PostEventLoop() },
+            after => $timeout,
+            interval => $timeout,
+        );
     }
+
+    warn "Entering event loop with model ".AnyEvent::detect();
 
     $MainLoopCondVar = AnyEvent->condvar;
     $MainLoopCondVar->recv(); # Blocks until $MainLoopCondVar->send is called
+
+    # Always run PostLoopCallback before we return, even if we timed out before we completed an event.
+    PostEventLoop();
+
     $MainLoopCondVar = undef;
 }
 

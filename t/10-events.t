@@ -9,46 +9,42 @@ no  warnings qw(deprecated);
 
 use vars qw($done);
 
-SKIP: {
-    my ($sysname, $nodename, $release, $version, $machine) = POSIX::uname();
-    skip "not on linux 2.6", 1 if $^O ne "linux" || $release =~ /^2\.[01234]/;
-    ok(Danga::Socket->HaveEpoll(), "using epoll");
+$done = 0;
+my $iters = 0;
+is(Danga::Socket->WatchedSockets, 0, "no watched sockets");
+
+my @iterations = (
+    sub {
+        ok(Server->new, "created server");
+        is(Danga::Socket->WatchedSockets, 1, "one watched socket");
+    },
+    sub {
+        ok(ClientOut->new, "created client");
+        is(Danga::Socket->WatchedSockets, 2, "two watched sockets");
+    },
+);
+
+Danga::Socket->SetPostLoopCallback(sub {
+    pass("test iteration $iters");
+});
+
+Danga::Socket->SetLoopTimeout(-1);
+Danga::Socket->EventLoop; # Should return immediately because we've not yet given it anything to do
+
+foreach my $cb (@iterations) {
+    $iters++;
+    $cb->();
+    Danga::Socket->EventLoop; # Spin the loop until it runs out of things to do
 }
 
+ok($done, "done");
 
-for my $mode ("auto", "poll") {
-    $done = 0;
-    my $iters = 0;
-    is(Danga::Socket->WatchedSockets, 0, "no watched sockets");
-    Danga::Socket->SetLoopTimeout(150);
-    Danga::Socket->SetPostLoopCallback(sub {
-        return 0 if $done;
-        $iters++;
-        ok(Server->new, "created server") if $iters == 1;
-        if ($iters == 3) {
-            ok(ClientOut->new, "created client outgoing");
-            is(Danga::Socket->WatchedSockets, 2, "two watched sockets");
-        }
-        return 1;
-    });
-
-    if ($mode eq "poll") {
-        require IO::Poll;
-        Danga::Socket->PollEventLoop;
-    } else {
-        Danga::Socket->EventLoop;
-    }
-
-    ok($done, "$mode mode is done");
-
-    # check descriptor map status
-    my $map = Danga::Socket->DescriptorMap;
-    ok(ref $map eq "HASH", "map is hash");
-    is(scalar keys %$map, 3, "watching 3 connections");
-    Danga::Socket->Reset;
-    is(scalar keys %$map, 0, "watching 0 connections");
-
-}
+# check descriptor map status
+my $map = Danga::Socket->DescriptorMap;
+ok(ref $map eq "HASH", "map is hash");
+is(scalar keys %$map, 3, "watching 3 connections");
+Danga::Socket->Reset;
+is(scalar keys %$map, 0, "watching 0 connections");
 
 ok(1, "finish");
 
