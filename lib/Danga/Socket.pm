@@ -1109,8 +1109,10 @@ sub push_back_read {
 
 =head2 C<< $obj->read( $bytecount ) >>
 
-Read at most I<bytecount> bytes from the underlying handle; returns scalar
-ref on read, or undef on connection closed.
+Read at most I<bytecount> bytes from the underlying handle; returns scalar ref
+on read, or undef on connection closed. If you call read more than once and no
+more data available after the first call, a scalar ref to an empty string is
+returned.
 
 =cut
 sub read {
