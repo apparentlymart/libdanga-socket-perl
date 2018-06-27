@@ -69,9 +69,9 @@ sub new {
                                       LocalPort => $SERVER_PORT,
                                       Proto     => 'tcp',
                                       ReuseAddr => 1,
+                                      Blocking  => 0,
                                       );
     die "couldn't create socket" unless $ssock;
-    IO::Handle::blocking($ssock, 0);
     my $self = $class->SUPER::new($ssock);
     $self->watch_read(1);
     return $self;
