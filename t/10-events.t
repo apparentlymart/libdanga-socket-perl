@@ -5,6 +5,7 @@ use Test::More tests => 34;
 use Net::EmptyPort;
 use Danga::Socket;
 use IO::Socket::INET;
+use Time::HiRes qw(sleep); # to allow fractional sleep
 use POSIX;
 no  warnings qw(deprecated);
 
@@ -28,6 +29,7 @@ for my $mode ("auto", "poll") {
         ok(Server->new, "created server") if $iters == 1;
         if ($iters == 3) {
             ok(ClientOut->new, "created client outgoing");
+            sleep 0.2;
             is(Danga::Socket->WatchedSockets, 2, "two watched sockets");
         }
         return 1;
