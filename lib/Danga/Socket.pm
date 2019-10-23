@@ -140,6 +140,10 @@ use constant POLLERR       => 8;
 use constant POLLHUP       => 16;
 use constant POLLNVAL      => 32;
 
+# caching pack used by tcp_cork
+use constant PACK_0 => pack("l", 0);
+use constant PACK_1 => pack("l", 1);
+
 our $HAVE_KQUEUE = eval { require IO::KQueue; 1 };
 
 our (
@@ -814,7 +818,7 @@ sub tcp_cork {
     my $rv;
     if (TCP_CORK) {
         $rv = setsockopt($self->{sock}, IPPROTO_TCP, TCP_CORK,
-                         pack("l", $val ? 1 : 0));
+                         $val ? PACK_1 : PACK_0);
     } else {
         # FIXME: implement freebsd *PUSH sockopts
         $rv = 1;
