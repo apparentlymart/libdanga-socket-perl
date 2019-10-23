@@ -1,5 +1,13 @@
 1.62
-    -- Tests don't hang on Windows any more (Andy Melnikov)
+    -- Fixed rt21751: test hangs on MSWin32 (Andy Melnikov)
+    -- Fixed rt34188: Tests use perlbal management port - so fail
+       if perlbal running (Andy Melnikov)
+    -- Fixed rt129487: epoll: fix misordered EPOLL_CTL_DEL call
+       (Eric Wong, e@80x24.org>
+    -- Fixed rt88518: typo fixes (dsteinbrunner@pobox.com)
+    -- Fixed rt85715: IPv6 support for local_ip_string
+       (ROBN@cpan.org)
+    -- Fixed 129484: deal with EINTR in IO::Poll path
 
 1.61 (2008-11-27)
     -- IPv6 support.  At least enough to get Perlbal going.
