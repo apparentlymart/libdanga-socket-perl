@@ -555,7 +555,7 @@ sub PollEventLoop {
         # the following sets up @poll as a series of ($poll,$event_mask)
         # items, then uses IO::Poll::_poll, implemented in XS, which
         # modifies the array in place with the even elements being
-        # replaced with the event masks that occured.
+        # replaced with the event masks that occurred.
         my @poll;
         foreach my $fd ( keys %OtherFds ) {
             push @poll, $fd, POLLIN;
@@ -1159,7 +1159,7 @@ sub read {
 
 =head2 (VIRTUAL) C<< $obj->event_read() >>
 
-Readable event handler. Concrete deriviatives of Danga::Socket should
+Readable event handler. Concrete derivatives of Danga::Socket should
 provide an implementation of this. The default implementation will die if
 called.
 
@@ -1168,7 +1168,7 @@ sub event_read  { die "Base class event_read called for $_[0]\n"; }
 
 =head2 (VIRTUAL) C<< $obj->event_err() >>
 
-Error event handler. Concrete deriviatives of Danga::Socket should
+Error event handler. Concrete derivatives of Danga::Socket should
 provide an implementation of this. The default implementation will die if
 called.
 
@@ -1177,7 +1177,7 @@ sub event_err   { die "Base class event_err called for $_[0]\n"; }
 
 =head2 (VIRTUAL) C<< $obj->event_hup() >>
 
-'Hangup' event handler. Concrete deriviatives of Danga::Socket should
+'Hangup' event handler. Concrete derivatives of Danga::Socket should
 provide an implementation of this. The default implementation will die if
 called.
 
@@ -1186,7 +1186,7 @@ sub event_hup   { die "Base class event_hup called for $_[0]\n"; }
 
 =head2 C<< $obj->event_write() >>
 
-Writable event handler. Concrete deriviatives of Danga::Socket may wish to
+Writable event handler. Concrete derivatives of Danga::Socket may wish to
 provide an implementation of this. The default implementation calls
 C<write()> with an C<undef>.
 
