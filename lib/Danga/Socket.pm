@@ -120,6 +120,7 @@ use fields ('sock',              # underlying socket
             'peer_v6',           # bool: cached; if peer is an IPv6 address
             'peer_ip',           # cached stringified IP address of $sock
             'peer_port',         # cached port number of $sock
+            'local_v6',          # bool: cached; if local IP address is an IPv6 address
             'local_ip',          # cached stringified IP address of local end of $sock
             'local_port',        # cached port number of local end of $sock
             'writer_func',       # subref which does writing.  must return bytes written (or undef) and set $! on errors
@@ -1358,10 +1359,28 @@ sub local_ip_string {
     my $pn = getsockname($self->{sock});
     return _undef("local_ip_string undef: getsockname") unless $pn;
 
-    my ($port, $iaddr) = Socket::sockaddr_in($pn);
+    my ($port, $iaddr) = eval {
+        if (length($pn) >= 28) {
+            return Socket6::unpack_sockaddr_in6($pn);
+        } else {
+            return Socket::sockaddr_in($pn);
+        }
+    };
+
+    if ($@) {
+        $self->{local_port} = "[Unknown localport '$@']";
+        return "[Unknown localname '$@']";
+    }
+
     $self->{local_port} = $port;
 
-    return $self->{local_ip} = Socket::inet_ntoa($iaddr);
+    if (length($iaddr) == 4) {
+        return $self->{local_ip} = Socket::inet_ntoa($iaddr);
+    } else {
+        $self->{local_v6} = 1;
+        return $self->{local_ip} = Socket6::inet_ntop(Socket6::AF_INET6(),
+                                                      $iaddr);
+    }
 }
 
 =head2 C<< $obj->local_addr_string() >>
@@ -1372,8 +1391,11 @@ object in form "ip:port"
 =cut
 sub local_addr_string {
     my Danga::Socket $self = shift;
-    my $ip = $self->local_ip_string;
-    return $ip ? "$ip:$self->{local_port}" : undef;
+    my $ip = $self->local_ip_string
+        or return undef;
+    return $self->{local_v6} ?
+        "[$ip]:$self->{local_port}" :
+        "$ip:$self->{local_port}";
 }
 
 
