@@ -4,6 +4,8 @@
        if perlbal running (Andy Melnikov)
     -- Fixed rt129487: epoll: fix misordered EPOLL_CTL_DEL call
        (Eric Wong, e@80x24.org>
+    -- Fixed rt129724: set close-on-exec flag on epoll descriptors
+       (Eric Wong)
     -- Fixed rt88518: typo fixes (dsteinbrunner@pobox.com)
     -- Fixed rt85715: IPv6 support for local_ip_string
        (ROBN@cpan.org)

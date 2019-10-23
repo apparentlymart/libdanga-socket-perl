@@ -96,6 +96,8 @@ use strict;
 use bytes;
 use POSIX ();
 use Time::HiRes ();
+use IO::Handle qw();
+use Fcntl qw(FD_CLOEXEC F_SETFD F_GETFD);
 
 my $opt_bsd_resource = eval "use BSD::Resource; 1;";
 
@@ -153,6 +155,7 @@ our (
      %PushBackSet,               # fd (num) -> Danga::Socket (fds with pushed back read data)
      $Epoll,                     # Global epoll fd (for epoll mode only)
      $KQueue,                    # Global kqueue fd (for kqueue mode only)
+     $_io,                       # IO::Handle for Epoll or KQueue
      @ToClose,                   # sockets to close when event loop is done
      %OtherFds,                  # A hash of "other" (non-Danga::Socket) file
                                  # descriptors for the event loop to track.
@@ -192,9 +195,9 @@ sub Reset {
     %PLCMap = ();
     $DoneInit = 0;
 
-    POSIX::close($Epoll)  if defined $Epoll  && $Epoll  >= 0;
-    POSIX::close($KQueue) if defined $KQueue && $KQueue >= 0;
-    
+    POSIX::close($KQueue) if !defined($_io) && defined($KQueue) && $KQueue >= 0;
+    $_io = undef; # closes Epoll, and KQueue if using libkqueue&epoll
+
     *EventLoop = *FirstTimeEventLoop;
 }
 
@@ -357,6 +360,16 @@ sub DescriptorMap {
 *descriptor_map = *DescriptorMap;
 *get_sock_ref = *DescriptorMap;
 
+sub set_cloexec ($) {
+    my ($fd) = @_;
+
+    # new_from_fd fails on real kqueue, but is needed for libkqueue
+    # (which emulates kqueue via epoll on Linux)
+    $_io = IO::Handle->new_from_fd($fd, 'r+') or return;
+    defined(my $fl = fcntl($_io, F_GETFD, 0)) or return;
+    fcntl($_io, F_SETFD, $fl | FD_CLOEXEC);
+}
+
 sub _InitPoller
 {
     return if $DoneInit;
@@ -366,6 +379,7 @@ sub _InitPoller
         $KQueue = IO::KQueue->new();
         $HaveKQueue = $KQueue >= 0;
         if ($HaveKQueue) {
+            set_cloexec($KQueue); # needed if using libkqueue & epoll
             *EventLoop = *KQueueEventLoop;
         }
     }
@@ -373,6 +387,7 @@ sub _InitPoller
         $Epoll = eval { epoll_create(1024); };
         $HaveEpoll = defined $Epoll && $Epoll >= 0;
         if ($HaveEpoll) {
+            set_cloexec($Epoll);
             *EventLoop = *EpollEventLoop;
         }
     }
