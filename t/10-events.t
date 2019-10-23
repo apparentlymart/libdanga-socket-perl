@@ -2,6 +2,7 @@
 
 use strict;
 use Test::More tests => 34;
+use Net::EmptyPort;
 use Danga::Socket;
 use IO::Socket::INET;
 use POSIX;
@@ -56,14 +57,15 @@ ok(1, "finish");
 package Server;
 use base 'Danga::Socket';
 use vars qw($SERVER_PORT);
+use Test::More;
 
 BEGIN {
-    $SERVER_PORT = $ENV{DS_TEST_SERVER_PORT} || 60001;
+    $SERVER_PORT = Net::EmptyPort::empty_port();
 }
 
 sub new {
     my $class = shift;
-    print STDERR "Starting server on port $SERVER_PORT\n";
+    diag("Starting server on port $SERVER_PORT");
     my $ssock = IO::Socket::INET->new(Listen    => 5,
                                       LocalAddr => '127.0.0.1',
                                       LocalPort => $SERVER_PORT,
@@ -155,6 +157,7 @@ use fields (
             'connected',  # 0 or 1
             );
 use Socket qw(PF_INET IPPROTO_TCP SOCK_STREAM);
+use Test::More;
 
 sub new {
     my $class = shift;
@@ -164,7 +167,7 @@ sub new {
 
     die "can't create outgoing sock" unless $sock && defined fileno($sock);
     IO::Handle::blocking($sock, 0);
-    print STDERR "Connecting to 127.0.0.1:$Server::SERVER_PORT\n";
+    diag("Connecting to 127.0.0.1:$Server::SERVER_PORT");
     connect $sock, Socket::sockaddr_in($Server::SERVER_PORT, Socket::inet_aton('127.0.0.1'));
 
     my $self = fields::new($class);
